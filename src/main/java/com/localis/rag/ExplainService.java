@@ -1,0 +1,121 @@
+package com.localis.rag;
+
+import com.localis.index.CodeChunk;
+import com.localis.index.IndexStore;
+import com.localis.index.RepositoryScanner;
+import com.localis.llm.LlmClient;
+import com.localis.llm.LlmClient.Message;
+import com.localis.search.Retriever;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.ArrayList;
+import java.util.List;
+
+/** Explica que hace un fichero concreto o responde preguntas sobre el codigo del repositorio. */
+public final class ExplainService {
+
+    static final String SYSTEM = """
+            You are a senior software engineer explaining an existing code base to a colleague who has never seen it.
+            Use ONLY the code provided. Every code line is prefixed with its line number ("123| code").
+            Support your statements by citing evidence as [path/File.ext:LINE] or [path/File.ext:START-END],
+            using ONLY files and lines that are shown. Never invent files, methods, lines or behavior.
+            If the code provided is not enough to answer, say exactly what is missing.
+            Be concrete and structured: purpose, main flow, inputs/outputs, dependencies, notable risks.
+            """ + AnswerEngine.LANGUAGE_RULE;
+
+    private static final int MAX_PARTS = 12;
+
+    private final LlmClient llm;
+    private final AnswerEngine engine;
+    private final Retriever retriever;
+    private final IndexStore store;
+    private final RepositoryScanner scanner;
+    private final int topK;
+    private final int maxContextChars;
+
+    public ExplainService(LlmClient llm, AnswerEngine engine, Retriever retriever, IndexStore store,
+            RepositoryScanner scanner, int topK, int maxContextChars) {
+        this.llm = llm;
+        this.engine = engine;
+        this.retriever = retriever;
+        this.store = store;
+        this.scanner = scanner;
+        this.topK = topK;
+        this.maxContextChars = maxContextChars;
+    }
+
+    public AnswerResult explain(String path, String question) {
+        boolean hasQuestion = question != null && !question.isBlank();
+        if ((path == null || path.isBlank()) && !hasQuestion) {
+            throw new IllegalArgumentException("Indique 'path' y/o 'question'");
+        }
+        return path == null || path.isBlank() ? explainQuestion(question) : explainFile(path, hasQuestion ? question : null);
+    }
+
+    private AnswerResult explainQuestion(String question) {
+        List<CodeChunk> chunks = retriever.search(question, topK).stream().map(Retriever.Hit::chunk).toList();
+        if (chunks.isEmpty()) {
+            return new AnswerResult("No se encontro codigo relevante en el indice. Compruebe que el repositorio "
+                    + "esta indexado.", List.of(), List.of(), List.of());
+        }
+        Context ctx = Context.fromChunks(chunks, maxContextChars);
+        return engine.ask(SYSTEM, "Question: " + question + "\n\nCode:\n" + ctx.text(), ctx);
+    }
+
+    private AnswerResult explainFile(String rawPath, String question) {
+        String path = rawPath.replace('\\', '/').replaceFirst("^\\./", "");
+        if (!store.filePaths().contains(path)) {
+            throw new NotFoundException("El fichero no esta en el indice: " + path);
+        }
+        List<String> lines;
+        try {
+            String text = RepositoryScanner.decode(scanner.readBytes(path));
+            if (text == null) {
+                throw new NotFoundException("El fichero es binario: " + path);
+            }
+            lines = com.localis.index.Chunker.splitLines(text);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        String task = question == null ? "Explain what this file does." : "Question about this file: " + question;
+        Context whole = Context.fromLines(path, lines, 1, lines.size());
+
+        if (whole.text().length() <= maxContextChars) {
+            return engine.ask(SYSTEM, task + "\n\nCode:\n" + whole.text(), whole);
+        }
+        return explainLargeFile(path, lines, task, whole);
+    }
+
+    /** Fichero mas grande que la ventana de contexto: resume por partes y luego combina los resumenes. */
+    private AnswerResult explainLargeFile(String path, List<String> lines, String task, Context whole) {
+        int budget = Math.max(maxContextChars / 2, 2000);
+        List<String> summaries = new ArrayList<>();
+        int from = 1;
+        int parts = 0;
+        while (from <= lines.size() && parts < MAX_PARTS) {
+            int to = from;
+            int chars = 0;
+            while (to <= lines.size() && chars + lines.get(to - 1).length() + 8 <= budget) {
+                chars += lines.get(to - 1).length() + 8;
+                to++;
+            }
+            to = Math.max(to - 1, from);
+            Context part = Context.fromLines(path, lines, from, to);
+            summaries.add("Part lines " + from + "-" + to + ":\n" + llm.chat(List.of(
+                    Message.system(SYSTEM),
+                    Message.user("Summarize what this part of the file does, citing line numbers.\n\n"
+                            + part.text()))));
+            from = to + 1;
+            parts++;
+        }
+        Context combined = new Context(String.join("\n\n", summaries), whole.shownRanges(), whole.sources());
+        AnswerResult result = engine.ask(SYSTEM, task + "\n\nThe file was too large to read at once. Below are "
+                + "summaries of consecutive parts; combine them into one coherent explanation.\n\n"
+                + combined.text(), combined);
+        List<String> warnings = new ArrayList<>(result.warnings());
+        warnings.add(from <= lines.size()
+                ? "Fichero muy extenso: solo se analizaron las primeras " + parts + " partes."
+                : "Fichero extenso: se analizo por partes (" + parts + ").");
+        return new AnswerResult(result.answer(), result.citations(), result.sources(), warnings);
+    }
+}

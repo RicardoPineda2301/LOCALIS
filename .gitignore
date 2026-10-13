@@ -1,0 +1,12 @@
+target/
+data/
+output/
+localis.properties
+license.json
+*.pem
+!src/main/resources/license-public.pem
+*.key
+.idea/
+.vscode/
+*.iml
+*.log

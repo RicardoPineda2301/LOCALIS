@@ -1,0 +1,40 @@
+# Copie este fichero a localis.properties y ajuste los valores.
+# Todo lo que no se indique usa el valor por defecto que se muestra aqui.
+# Cualquier clave se puede sobrescribir con una variable de entorno LOCALIS_<CLAVE_EN_MAYUSCULAS>,
+# por ejemplo LOCALIS_OLLAMA_CHATMODEL.
+
+# --- Servidor (por defecto solo accesible desde esta maquina) ---
+server.host=127.0.0.1
+server.port=8080
+# Si se define, todas las peticiones (salvo /api/health) deben llevar: Authorization: Bearer <token>
+server.apiToken=
+
+# --- Motor de IA local (Ollama) ---
+ollama.baseUrl=http://localhost:11434
+ollama.chatModel=codellama:13b-instruct
+ollama.embedModel=nomic-embed-text
+ollama.numCtx=8192
+ollama.timeoutSeconds=600
+
+# --- Modo sin internet: unicos hosts a los que LOCALIS puede conectarse ---
+network.allowedHosts=localhost,127.0.0.1,::1
+
+# --- Repositorio del cliente a analizar (ruta absoluta) ---
+repo.path=
+
+# --- Datos y plantillas ---
+data.dir=./data
+templates.dir=./templates
+
+# --- Marca del cliente para los documentos ---
+branding.company=
+branding.logo=
+
+# --- Retrieval ---
+retrieval.topK=8
+retrieval.maxContextChars=16000
+
+# --- Licencia (poner license.enforce=true en las builds para clientes) ---
+license.enforce=false
+license.file=./license.json
+license.publicKey=

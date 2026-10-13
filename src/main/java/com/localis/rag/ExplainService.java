@@ -21,7 +21,7 @@ public final class ExplainService {
             using ONLY files and lines that are shown. Never invent files, methods, lines or behavior.
             If the code provided is not enough to answer, say exactly what is missing.
             Be concrete and structured: purpose, main flow, inputs/outputs, dependencies, notable risks.
-            """ + AnswerEngine.LANGUAGE_RULE;
+            """;
 
     private static final int MAX_PARTS = 12;
 
@@ -45,24 +45,33 @@ public final class ExplainService {
     }
 
     public AnswerResult explain(String path, String question) {
+        return explain(path, question, null);
+    }
+
+    /** acceptLanguage: cabecera del navegador; solo se usa si el idioma de la pregunta no se puede deducir. */
+    public AnswerResult explain(String path, String question, String acceptLanguage) {
         boolean hasQuestion = question != null && !question.isBlank();
         if ((path == null || path.isBlank()) && !hasQuestion) {
             throw new IllegalArgumentException("Indique 'path' y/o 'question'");
         }
-        return path == null || path.isBlank() ? explainQuestion(question) : explainFile(path, hasQuestion ? question : null);
+        String lang = Language.resolve(question, acceptLanguage);
+        return path == null || path.isBlank() ? explainQuestion(question, lang)
+                : explainFile(path, hasQuestion ? question : null, lang);
     }
 
-    private AnswerResult explainQuestion(String question) {
+    private AnswerResult explainQuestion(String question, String lang) {
+        Progress.report("Buscando el codigo relacionado");
         List<CodeChunk> chunks = retriever.search(question, topK).stream().map(Retriever.Hit::chunk).toList();
         if (chunks.isEmpty()) {
             return new AnswerResult("No se encontro codigo relevante en el indice. Compruebe que el repositorio "
                     + "esta indexado.", List.of(), List.of(), List.of());
         }
         Context ctx = Context.fromChunks(chunks, maxContextChars);
-        return engine.ask(SYSTEM, "Question: " + question + "\n\nCode:\n" + ctx.text(), ctx);
+        Progress.report("Consultando al modelo");
+        return engine.ask(SYSTEM, "Question: " + question + "\n\nCode:\n" + ctx.text(), ctx, lang);
     }
 
-    private AnswerResult explainFile(String rawPath, String question) {
+    private AnswerResult explainFile(String rawPath, String question, String lang) {
         String path = rawPath.replace('\\', '/').replaceFirst("^\\./", "");
         if (!store.filePaths().contains(path)) {
             throw new NotFoundException("El fichero no esta en el indice: " + path);
@@ -81,18 +90,22 @@ public final class ExplainService {
         Context whole = Context.fromLines(path, lines, 1, lines.size());
 
         if (whole.text().length() <= maxContextChars) {
-            return engine.ask(SYSTEM, task + "\n\nCode:\n" + whole.text(), whole);
+            Progress.report("Consultando al modelo");
+            return engine.ask(SYSTEM, task + "\n\nCode:\n" + whole.text(), whole, lang);
         }
-        return explainLargeFile(path, lines, task, whole);
+        return explainLargeFile(path, lines, task, whole, lang);
     }
 
     /** Fichero mas grande que la ventana de contexto: resume por partes y luego combina los resumenes. */
-    private AnswerResult explainLargeFile(String path, List<String> lines, String task, Context whole) {
+    private AnswerResult explainLargeFile(String path, List<String> lines, String task, Context whole, String lang) {
         int budget = Math.max(maxContextChars / 2, 2000);
+        int estimated = Math.min(MAX_PARTS, Math.max(2, (int) Math.ceil(whole.text().length() / (double) budget)));
         List<String> summaries = new ArrayList<>();
         int from = 1;
         int parts = 0;
         while (from <= lines.size() && parts < MAX_PARTS) {
+            Progress.checkCancelled();
+            Progress.report("Analizando la parte " + (parts + 1) + " de ~" + estimated);
             int to = from;
             int chars = 0;
             while (to <= lines.size() && chars + lines.get(to - 1).length() + 8 <= budget) {
@@ -102,16 +115,19 @@ public final class ExplainService {
             to = Math.max(to - 1, from);
             Context part = Context.fromLines(path, lines, from, to);
             summaries.add("Part lines " + from + "-" + to + ":\n" + llm.chat(List.of(
-                    Message.system(SYSTEM),
-                    Message.user("Summarize what this part of the file does, citing line numbers.\n\n"
-                            + part.text()))));
+                    Message.system(AnswerEngine.withLanguage(SYSTEM, lang)),
+                    Message.user("Summarize what this part of the file does in at most 120 words, citing line "
+                            + "numbers. Be brief: this summary will be merged into a larger explanation.\n\n"
+                            + part.text() + "\n\n" + AnswerEngine.languageReminder(lang)))));
             from = to + 1;
             parts++;
         }
+        Progress.checkCancelled();
+        Progress.report("Combinando los resumenes en una explicacion");
         Context combined = new Context(String.join("\n\n", summaries), whole.shownRanges(), whole.sources());
         AnswerResult result = engine.ask(SYSTEM, task + "\n\nThe file was too large to read at once. Below are "
                 + "summaries of consecutive parts; combine them into one coherent explanation.\n\n"
-                + combined.text(), combined);
+                + combined.text(), combined, lang);
         List<String> warnings = new ArrayList<>(result.warnings());
         warnings.add(from <= lines.size()
                 ? "Fichero muy extenso: solo se analizaron las primeras " + parts + " partes."

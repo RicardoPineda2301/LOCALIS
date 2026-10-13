@@ -14,6 +14,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -36,6 +37,9 @@ public final class RepositoryScanner {
 
     public record SourceFile(String relativePath, long size) {}
 
+    /** Elemento del arbol de ficheros; indexable = se incluiria en el indice. */
+    public record Entry(String name, String path, boolean directory, boolean indexable, long size) {}
+
     private final Path root;
 
     public RepositoryScanner(Path root) {
@@ -44,6 +48,43 @@ public final class RepositoryScanner {
 
     public Path root() {
         return root;
+    }
+
+    /** Lista el contenido directo de una carpeta del repositorio (ruta relativa; vacia = raiz), carpetas primero. */
+    public List<Entry> list(String relativeDir) throws IOException {
+        Path dir = root.resolve(relativeDir == null ? "" : relativeDir).normalize();
+        if (!dir.startsWith(root) || Files.isSymbolicLink(dir)) {
+            throw new SecurityException("Ruta fuera del repositorio: " + relativeDir);
+        }
+        if (!Files.isDirectory(dir)) {
+            throw new IllegalArgumentException("No es una carpeta del repositorio: " + relativeDir);
+        }
+        List<Entry> out = new ArrayList<>();
+        try (var stream = Files.newDirectoryStream(dir)) {
+            for (Path p : stream) {
+                BasicFileAttributes a;
+                try {
+                    a = Files.readAttributes(p, BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                } catch (IOException e) {
+                    continue;
+                }
+                String name = p.getFileName().toString();
+                if (a.isSymbolicLink() || a.isOther()) {
+                    continue;
+                }
+                if (a.isDirectory()) {
+                    if (!IGNORED_DIRS.contains(name)) {
+                        out.add(new Entry(name, relative(p), true, false, 0));
+                    }
+                } else {
+                    out.add(new Entry(name, relative(p), false,
+                            a.size() > 0 && a.size() <= MAX_FILE_BYTES && hasSourceExtension(p), a.size()));
+                }
+            }
+        }
+        out.sort(Comparator.comparing((Entry e) -> !e.directory())
+                .thenComparing(e -> e.name().toLowerCase(Locale.ROOT)));
+        return out;
     }
 
     public List<SourceFile> scan() throws IOException {

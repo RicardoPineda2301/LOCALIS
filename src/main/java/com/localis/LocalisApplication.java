@@ -3,18 +3,11 @@ package com.localis;
 import com.localis.api.ApiServer;
 import com.localis.config.AppConfig;
 import com.localis.docs.DocumentationService;
-import com.localis.index.IndexStore;
-import com.localis.index.Indexer;
-import com.localis.index.RepositoryScanner;
 import com.localis.license.LicenseValidator;
 import com.localis.license.MachineFingerprint;
 import com.localis.llm.OllamaClient;
 import com.localis.net.NetworkGuard;
-import com.localis.rag.AnswerEngine;
-import com.localis.rag.CitationVerifier;
-import com.localis.rag.DiagnoseService;
-import com.localis.rag.ExplainService;
-import com.localis.search.Retriever;
+import com.localis.workspace.Workspace;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.util.LinkedHashMap;
@@ -57,27 +50,17 @@ public final class LocalisApplication {
 
         var guard = new NetworkGuard(cfg.allowedHosts());
         var llm = new OllamaClient(cfg, guard);
-        var store = new IndexStore(cfg.dataDir().resolve("index.db"));
-        var retriever = new Retriever(store, llm);
-        var verifier = new CitationVerifier(store::filePaths,
-                p -> store.file(p).map(IndexStore.FileInfo::lines).orElse(0));
-        var engine = new AnswerEngine(llm, verifier);
-
-        RepositoryScanner scanner = cfg.repoPath() == null ? null : new RepositoryScanner(cfg.repoPath());
-        Indexer indexer = scanner == null ? null : new Indexer(scanner, store, llm);
-        if (scanner == null) {
-            LOG.warn("repo.path no configurado: indexacion y preguntas sobre codigo no disponibles");
+        var workspace = new Workspace(cfg, llm);
+        if (workspace.repo().isEmpty()) {
+            LOG.warn("Ningun repositorio configurado: elijalo desde la interfaz web (boton Configurar)");
         }
-        var explain = new ExplainService(llm, engine, retriever, store, scanner, cfg.retrievalTopK(),
-                cfg.maxContextChars());
-        var diagnose = new DiagnoseService(llm, engine, retriever, cfg.retrievalTopK(), cfg.maxContextChars());
         var docs = new DocumentationService(cfg.templatesDir(), cfg.companyName(), cfg.logoPath());
 
-        var server = new ApiServer(new ApiServer.Deps(cfg, llm, store, indexer, explain, diagnose, docs,
-                moduleAllowed, () -> licenseInfo));
+        var server = new ApiServer(new ApiServer.Deps(cfg, llm, workspace, docs, moduleAllowed,
+                () -> licenseInfo));
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             server.stop();
-            store.close();
+            workspace.close();
         }));
         server.start();
     }

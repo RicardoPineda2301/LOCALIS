@@ -198,4 +198,151 @@ class PipelineTest {
         assertTrue(r.warnings().stream().anyMatch(w -> w.contains("por partes") || w.contains("primeras")));
         assertEquals(List.of(), r.citations().stream().filter(c -> !c.verified()).toList());
     }
+
+    private static boolean isAnswerCall(List<com.localis.llm.LlmClient.Message> m) {
+        return !m.get(0).content().contains("comma-separated");
+    }
+
+    @Test
+    void everyAnswerPromptAsksForTheLanguageOfTheQuestionInSystemAndAtTheEnd() throws Exception {
+        llm.chatHandler = m -> "Calcula facturas. InvoiceCalculator.java:" + roundLine;
+        var explain = new ExplainService(llm, engine, retriever, store, new RepositoryScanner(repo), 8, 16000);
+
+        explain.explain("src/com/acme/billing/InvoiceCalculator.java", "Â¿QuÃ© hace esta clase?");
+        var spanish = llm.chatCalls.get(llm.chatCalls.size() - 1);
+        assertTrue(spanish.get(0).content().contains("Write your entire answer in Spanish"));
+        assertTrue(spanish.get(1).content().endsWith("Respond in Spanish."));
+
+        explain.explain("src/com/acme/billing/InvoiceCalculator.java", "What does this class do and how is it used?");
+        var english = llm.chatCalls.get(llm.chatCalls.size() - 1);
+        assertTrue(english.get(0).content().contains("Write your entire answer in English"));
+        assertTrue(english.get(1).content().endsWith("Respond in English."));
+    }
+
+    @Test
+    void withoutAQuestionTheBrowserLanguageDecidesAndSpanishIsTheDefault() throws Exception {
+        llm.chatHandler = m -> "Calcula facturas. InvoiceCalculator.java:" + roundLine;
+        var explain = new ExplainService(llm, engine, retriever, store, new RepositoryScanner(repo), 8, 16000);
+        String file = "src/com/acme/billing/InvoiceCalculator.java";
+
+        explain.explain(file, null, "en-GB,en;q=0.8");
+        assertTrue(llm.chatCalls.get(llm.chatCalls.size() - 1).get(1).content().endsWith("Respond in English."));
+        explain.explain(file, null, null);
+        assertTrue(llm.chatCalls.get(llm.chatCalls.size() - 1).get(1).content().endsWith("Respond in Spanish."));
+    }
+
+    @Test
+    void diagnoseAnswersInTheLanguageOfTheProblem() {
+        llm.chatHandler = msgs -> isAnswerCall(msgs) ? "Causa probable [src/com/acme/billing/InvoiceCalculator.java:"
+                + roundLine + "]" : "invoice";
+        var diagnose = new DiagnoseService(llm, engine, retriever, 8, 16000);
+
+        diagnose.diagnose("the invoice total is wrong when there are many items");
+        var call = llm.chatCalls.stream().filter(PipelineTest::isAnswerCall).reduce((a, b) -> b).orElseThrow();
+        assertTrue(call.get(1).content().endsWith("Respond in English."));
+    }
+
+    @Test
+    void citationCorrectionRoundKeepsTheLanguage() {
+        int[] n = {0};
+        llm.chatHandler = msgs -> {
+            if (!isAnswerCall(msgs)) {
+                return "invoice";
+            }
+            return n[0]++ == 0 ? "Mira InvoiceCalculator.java:999" : "Mira InvoiceCalculator.java:" + roundLine;
+        };
+        new DiagnoseService(llm, engine, retriever, 8, 16000).diagnose("Â¿Por quÃ© falla el total de la factura?");
+        var last = llm.chatCalls.get(llm.chatCalls.size() - 1);
+        assertTrue(last.get(last.size() - 1).content().endsWith("Respond in Spanish."));
+    }
+
+    @Test
+    void anAnswerInTheWrongLanguageIsRewrittenExactlyOnce() {
+        String english = "The function calculates the invoice total and this is what the code does because it is "
+                + "the tax rate that is applied to the subtotal and the items are used for the rounding in the file.";
+        String spanish = "La funcion calcula el total de la factura y es el impuesto que se aplica al subtotal "
+                + "segun lo que hace el codigo. InvoiceCalculator.java:" + roundLine;
+        llm.chatHandler = msgs -> {
+            if (!isAnswerCall(msgs)) {
+                return "invoice";
+            }
+            boolean rewriteRequested = msgs.get(msgs.size() - 1).content().contains("Rewrite it entirely in Spanish");
+            return rewriteRequested ? spanish : english;
+        };
+        AnswerResult r = new DiagnoseService(llm, engine, retriever, 8, 16000)
+                .diagnose("Â¿Por quÃ© el total de la factura sale mal?");
+
+        assertEquals(spanish, r.answer());
+        assertEquals(2, llm.chatCalls.stream().filter(PipelineTest::isAnswerCall).count());
+    }
+
+    @Test
+    void ifTheRewriteIsStillInTheWrongLanguageTheOriginalAnswerIsKept() {
+        String english = "The function calculates the invoice total and this is what the code does because it is "
+                + "the tax rate that is applied to the subtotal and the items are used for the rounding in the file.";
+        llm.chatHandler = msgs -> isAnswerCall(msgs) ? english : "invoice";
+        AnswerResult r = new DiagnoseService(llm, engine, retriever, 8, 16000)
+                .diagnose("Â¿Por quÃ© el total de la factura sale mal?");
+        assertEquals(english, r.answer());
+        assertEquals(2, llm.chatCalls.stream().filter(PipelineTest::isAnswerCall).count(),
+                "respuesta + una unica reescritura; nunca se reintenta en bucle");
+    }
+
+    @Test
+    void noCitationWarningIsSkippedWhenLinesCanBeInferredAndKeptOtherwise() {
+        llm.chatHandler = msgs -> isAnswerCall(msgs) ? "El fallo está en la línea " + roundLine + " del redondeo."
+                : "invoice";
+        var diagnose = new DiagnoseService(llm, engine, retriever, 8, 16000);
+        assertTrue(diagnose.diagnose("el total de la factura sale mal").warnings().isEmpty());
+
+        llm.chatHandler = msgs -> isAnswerCall(msgs) ? "No sé, parece un problema general." : "invoice";
+        assertFalse(diagnose.diagnose("el total de la factura sale mal").warnings().isEmpty());
+    }
+
+    @Test
+    void largeFileReportsProgressAndStopsBetweenPartsWhenCancelled() throws Exception {
+        StringBuilder sb = new StringBuilder("public class Big {\n");
+        for (int i = 0; i < 400; i++) {
+            sb.append("    int field").append(i).append(" = ").append(i).append("; // comentario largo de relleno\n");
+        }
+        Files.writeString(repo.resolve("src/Big.java"), sb.append("}\n").toString());
+        runIndex();
+        List<String> messages = new java.util.ArrayList<>();
+        int[] calls = {0};
+        llm.chatHandler = m -> {
+            if (++calls[0] == 2) {
+                Thread.currentThread().interrupt();
+            }
+            return "Resumen. Big.java:10";
+        };
+        var explain = new ExplainService(llm, engine, retriever, store, new RepositoryScanner(repo), 8, 4000);
+        try (var ignored = com.localis.rag.Progress.bind(messages::add)) {
+            assertThrows(java.util.concurrent.CancellationException.class,
+                    () -> explain.explain("src/Big.java", "¿qué hace?"));
+        } finally {
+            Thread.interrupted();
+        }
+        assertEquals(2, llm.chatCalls.size(), "no se lanzan mas partes tras cancelar");
+        assertTrue(messages.get(0).contains("parte 1"), messages.toString());
+    }
+
+    @Test
+    void largeFilePartsAndFinalAnswerAllCarryTheLanguage() throws Exception {
+        StringBuilder sb = new StringBuilder("public class Big {\n");
+        for (int i = 0; i < 400; i++) {
+            sb.append("    int field").append(i).append(" = ").append(i).append("; // comentario largo de relleno\n");
+        }
+        Files.writeString(repo.resolve("src/Big.java"), sb.append("}\n").toString());
+        runIndex();
+        llm.chatHandler = m -> "Resumen. Big.java:10";
+        new ExplainService(llm, engine, retriever, store, new RepositoryScanner(repo), 8, 4000)
+                .explain("src/Big.java", "Â¿QuÃ© hace este archivo?");
+
+        assertTrue(llm.chatCalls.size() > 2);
+        for (var call : llm.chatCalls) {
+            assertTrue(call.get(0).content().contains("Write your entire answer in Spanish"));
+            assertTrue(call.get(call.size() - 1).content().endsWith("Respond in Spanish.")
+                    || call.get(call.size() - 1).role().equals("assistant"));
+        }
+    }
 }

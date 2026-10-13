@@ -1,4 +1,8 @@
 target/
+dist/
+.test-mi/
+frontend/node_modules/
+src/main/resources/web/
 data/
 output/
 localis.properties

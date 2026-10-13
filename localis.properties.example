@@ -20,6 +20,8 @@ ollama.timeoutSeconds=600
 network.allowedHosts=localhost,127.0.0.1,::1
 
 # --- Repositorio del cliente a analizar (ruta absoluta) ---
+# Opcional: se puede elegir desde la interfaz web (boton "Configurar"). La ultima eleccion se recuerda en
+# <data.dir>/workspace.json y tiene prioridad sobre este valor; cada repositorio tiene su propio indice.
 repo.path=
 
 # --- Datos y plantillas ---

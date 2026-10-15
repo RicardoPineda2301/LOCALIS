@@ -14,3 +14,4 @@ license.json
 .vscode/
 *.iml
 *.log
+launch.md

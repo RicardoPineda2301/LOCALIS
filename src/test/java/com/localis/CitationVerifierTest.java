@@ -41,6 +41,19 @@ class CitationVerifierTest {
     }
 
     @Test
+    void aBareFileNameIsResolvedToTheOnlyCandidateTheModelActuallySaw() {
+        var seesB = Map.of("src/b/Util.java", List.of(new int[] {1, 40}));
+        var c = verifier.verify("ver Util.java:5-8", seesB).get(0);
+        assertEquals(Status.VERIFIED, c.status());
+        assertEquals("src/b/Util.java", c.path());
+
+        var seesBoth = Map.of("src/a/Util.java", List.of(new int[] {1, 40}), "src/b/Util.java",
+                List.of(new int[] {1, 40}));
+        assertEquals(Status.AMBIGUOUS_FILE, verifier.verify("ver Util.java:5", seesBoth).get(0).status());
+        assertEquals(Status.AMBIGUOUS_FILE, verifier.verify("ver Util.java:5", Map.of()).get(0).status());
+    }
+
+    @Test
     void windowsPathsAreNormalizedAndDuplicatesCollapsed() {
         var cites = verifier.verify("a src\\com\\acme\\billing\\InvoiceCalculator.java:15 y de nuevo "
                 + "src\\com\\acme\\billing\\InvoiceCalculator.java:15", shown);

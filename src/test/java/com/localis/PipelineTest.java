@@ -112,6 +112,21 @@ class PipelineTest {
     }
 
     @Test
+    void warmUpBuildsTheSearchStructureInTheBackgroundAndReindexingInvalidatesIt() throws Exception {
+        assertFalse(retriever.isWarm(), "recien indexado: la estructura aun no se ha pedido");
+        retriever.warmUp();
+        long end = System.currentTimeMillis() + 5000;
+        while (!retriever.isWarm() && System.currentTimeMillis() < end) {
+            Thread.sleep(10);
+        }
+        assertTrue(retriever.isWarm());
+
+        Files.writeString(repo.resolve("db/otra.sql"), "SELECT 2;\n");
+        runIndex();
+        assertFalse(retriever.isWarm(), "un cambio en el indice deja la estructura obsoleta");
+    }
+
+    @Test
     void diagnoseReturnsVerifiedCitationAndSendsNumberedCode() {
         llm.chatHandler = msgs -> msgs.get(0).content().contains("comma-separated")
                 ? "calculateInvoiceTotal, invoice, tax, round"

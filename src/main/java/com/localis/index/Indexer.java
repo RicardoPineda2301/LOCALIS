@@ -27,11 +27,17 @@ public final class Indexer {
     private final Chunker chunker = new Chunker();
     private volatile Status status = new Status(State.IDLE, 0, 0, 0, 0, true, "");
     private Thread worker;
+    private volatile Runnable onFinished = () -> { };
 
     public Indexer(RepositoryScanner scanner, IndexStore store, LlmClient llm) {
         this.scanner = scanner;
         this.store = store;
         this.llm = llm;
+    }
+
+    /** Se ejecuta al terminar una indexacion con exito (p. ej. para precalentar el buscador). */
+    public void onFinished(Runnable r) {
+        this.onFinished = r;
     }
 
     public Status status() {
@@ -47,6 +53,7 @@ public final class Indexer {
         worker = Thread.ofVirtual().name("localis-indexer").start(() -> {
             try {
                 run();
+                onFinished.run();
             } catch (Exception e) {
                 LOG.error("Fallo la indexacion", e);
                 Status s = status;

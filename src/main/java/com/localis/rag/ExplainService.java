@@ -20,7 +20,10 @@ public final class ExplainService {
             Support your statements by citing evidence as [path/File.ext:LINE] or [path/File.ext:START-END],
             using ONLY files and lines that are shown. Never invent files, methods, lines or behavior.
             If the code provided is not enough to answer, say exactly what is missing.
-            Be concrete and structured: purpose, main flow, inputs/outputs, dependencies, notable risks.
+            Be concrete and structured: purpose, main flow, inputs/outputs, dependencies, notable risks. Skip any
+            section that has nothing relevant to say.
+            Be concise: aim for 150-300 words and never exceed 400. Do NOT paste or retype the code; point to it with
+            citations instead. Prefer short bullet points over long paragraphs.
             """;
 
     private static final int MAX_PARTS = 12;
@@ -116,8 +119,9 @@ public final class ExplainService {
             Context part = Context.fromLines(path, lines, from, to);
             summaries.add("Part lines " + from + "-" + to + ":\n" + llm.chat(List.of(
                     Message.system(AnswerEngine.withLanguage(SYSTEM, lang)),
-                    Message.user("Summarize what this part of the file does in at most 120 words, citing line "
-                            + "numbers. Be brief: this summary will be merged into a larger explanation.\n\n"
+                    Message.user("Summarize what this part of the file does in at most 80 words, citing line "
+                            + "numbers. Do not retype code. Be brief: this summary will be merged into a larger "
+                            + "explanation.\n\n"
                             + part.text() + "\n\n" + AnswerEngine.languageReminder(lang)))));
             from = to + 1;
             parts++;
@@ -126,7 +130,8 @@ public final class ExplainService {
         Progress.report("Combinando los resumenes en una explicacion");
         Context combined = new Context(String.join("\n\n", summaries), whole.shownRanges(), whole.sources());
         AnswerResult result = engine.ask(SYSTEM, task + "\n\nThe file was too large to read at once. Below are "
-                + "summaries of consecutive parts; combine them into one coherent explanation.\n\n"
+                + "summaries of consecutive parts; combine them into one coherent explanation of at most 350 words, "
+                + "without repeating the same point per part.\n\n"
                 + combined.text(), combined, lang);
         List<String> warnings = new ArrayList<>(result.warnings());
         warnings.add(from <= lines.size()

@@ -134,13 +134,16 @@ public final class Workspace implements AutoCloseable {
         Path dir = cfg.dataDir().resolve("repos").resolve(id(repo));
         Files.createDirectories(dir);
         IndexStore store = new IndexStore(dir.resolve("index.db"));
-        var scanner = new RepositoryScanner(repo);
+        var scanner = new RepositoryScanner(repo, cfg.indexIgnoreDirs());
         var retriever = new Retriever(store, llm);
         var engine = new AnswerEngine(llm, new CitationVerifier(store::filePaths,
                 p -> store.file(p).map(IndexStore.FileInfo::lines).orElse(0)));
-        state = new State(repo, store, scanner, new Indexer(scanner, store, llm),
+        var indexer = new Indexer(scanner, store, llm);
+        indexer.onFinished(retriever::warmUp);
+        state = new State(repo, store, scanner, indexer,
                 new ExplainService(llm, engine, retriever, store, scanner, cfg.retrievalTopK(), cfg.maxContextChars()),
                 new DiagnoseService(llm, engine, retriever, cfg.retrievalTopK(), cfg.maxContextChars()));
+        retriever.warmUp();
         if (old != null) {
             old.store().close();
         }

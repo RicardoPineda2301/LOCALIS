@@ -18,6 +18,8 @@ public record AppConfig(
         String embedModel,
         int numCtx,
         int llmTimeoutSeconds,
+        String keepAlive,
+        int maxTokens,
         List<String> allowedHosts,
         Path repoPath,
         Path dataDir,
@@ -28,7 +30,8 @@ public record AppConfig(
         Path licenseFile,
         Path licensePublicKey,
         int retrievalTopK,
-        int maxContextChars) {
+        int maxContextChars,
+        List<String> indexIgnoreDirs) {
 
     public static AppConfig defaults() {
         return from(new Properties());
@@ -54,6 +57,8 @@ public record AppConfig(
                 str(p, "ollama.embedModel", "nomic-embed-text"),
                 Integer.parseInt(str(p, "ollama.numCtx", "8192")),
                 Integer.parseInt(str(p, "ollama.timeoutSeconds", "600")),
+                str(p, "ollama.keepAlive", "30m"),
+                Integer.parseInt(str(p, "ollama.maxTokens", "1500")),
                 list(str(p, "network.allowedHosts", "localhost,127.0.0.1,::1")),
                 path(str(p, "repo.path", "")),
                 Path.of(str(p, "data.dir", "./data")),
@@ -64,7 +69,8 @@ public record AppConfig(
                 Path.of(str(p, "license.file", "./license.json")),
                 path(str(p, "license.publicKey", "")),
                 Integer.parseInt(str(p, "retrieval.topK", "8")),
-                Integer.parseInt(str(p, "retrieval.maxContextChars", "16000")));
+                Integer.parseInt(str(p, "retrieval.maxContextChars", "16000")),
+                list(str(p, "index.ignoreDirs", "")));
     }
 
     private static String str(Properties p, String key, String def) {

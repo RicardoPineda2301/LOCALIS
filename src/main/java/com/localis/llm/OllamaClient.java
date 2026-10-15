@@ -6,11 +6,16 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.localis.config.AppConfig;
 import com.localis.net.NetworkGuard;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.InterruptedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +28,8 @@ public final class OllamaClient implements LlmClient {
     private final String chatModel;
     private final String embedModel;
     private final int numCtx;
+    private final String keepAlive;
+    private final int maxTokens;
     private final Duration timeout;
     private final HttpClient http;
 
@@ -32,6 +39,8 @@ public final class OllamaClient implements LlmClient {
         this.chatModel = cfg.chatModel();
         this.embedModel = cfg.embedModel();
         this.numCtx = cfg.numCtx();
+        this.keepAlive = cfg.keepAlive();
+        this.maxTokens = cfg.maxTokens();
         this.timeout = Duration.ofSeconds(cfg.llmTimeoutSeconds());
         // Sin redirecciones: una respuesta no puede desviarnos a otro host.
         this.http = HttpClient.newBuilder()
@@ -40,24 +49,121 @@ public final class OllamaClient implements LlmClient {
                 .build();
     }
 
+    private record Attempt(String text, boolean looped, boolean capped) {}
+
     @Override
     public String chat(List<Message> messages) {
+        Attempt a = chatOnce(messages, 0.1, 1.0);
+        if (a.looped()) {
+            // Otro muestreo suele sacar al modelo del bucle; si vuelve a caer se entrega lo util y se avisa.
+            a = chatOnce(messages, 0.5, 1.15);
+        }
+        String text = a.text();
+        boolean truncated = a.capped();
+        if (a.looped()) {
+            int cut = Repetition.loopCut(text);
+            text = cut > 0 ? text.substring(0, cut) : text;
+            truncated = true;
+        }
+        if (truncated) {
+            LlmStats.markTruncated();
+        }
+        return text;
+    }
+
+    /** Una generacion en streaming; si detecta un bucle de repeticion corta la conexion al instante. */
+    private Attempt chatOnce(List<Message> messages, double temperature, double repeatPenalty) {
         ObjectNode body = JSON.createObjectNode();
         body.put("model", chatModel);
-        body.put("stream", false);
+        body.put("stream", true);
+        body.put("keep_alive", keepAlive);
         ObjectNode options = body.putObject("options");
-        options.put("temperature", 0.1);
+        options.put("temperature", temperature);
         options.put("num_ctx", numCtx);
+        // Sin tope, un bucle de repeticion del modelo no termina nunca (Ollama desplaza el contexto y sigue).
+        options.put("num_predict", maxTokens);
+        if (repeatPenalty != 1.0) {
+            options.put("repeat_penalty", repeatPenalty);
+        }
         ArrayNode arr = body.putArray("messages");
         for (Message m : messages) {
             arr.addObject().put("role", m.role()).put("content", m.content());
         }
-        JsonNode resp = post("api/chat", body);
-        JsonNode content = resp.path("message").path("content");
-        if (content.isMissingNode()) {
-            throw new LlmException("Respuesta de Ollama sin contenido: " + resp);
+        long start = System.nanoTime();
+        try {
+            HttpRequest req = HttpRequest.newBuilder(baseUri.resolve("api/chat"))
+                    .timeout(timeout)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(body)))
+                    .build();
+            HttpResponse<InputStream> r = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+            if (r.statusCode() != 200) {
+                try (InputStream in = r.body()) {
+                    throw new LlmException("Ollama respondio HTTP " + r.statusCode() + ": "
+                            + new String(in.readAllBytes(), StandardCharsets.UTF_8));
+                }
+            }
+            StringBuilder text = new StringBuilder();
+            JsonNode last = null;
+            boolean looped = false;
+            int chunks = 0;
+            int checkedAt = 0;
+            // Cerrar el stream cancela la peticion: Ollama deja de generar.
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(r.body(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    if (line.isBlank()) {
+                        continue;
+                    }
+                    JsonNode n = JSON.readTree(line);
+                    if (n.hasNonNull("error")) {
+                        throw new LlmException("Ollama: " + n.get("error").asText());
+                    }
+                    text.append(n.path("message").path("content").asText(""));
+                    chunks++;
+                    if (n.path("done").asBoolean(false)) {
+                        last = n;
+                        break;
+                    }
+                    if (text.length() - checkedAt >= 40) {
+                        checkedAt = text.length();
+                        if (Repetition.loopCut(text.toString()) >= 0) {
+                            looped = true;
+                            break;
+                        }
+                    }
+                    if (System.nanoTime() - start > timeout.toNanos()) {
+                        throw new LlmException("Tiempo de espera agotado esperando al modelo");
+                    }
+                }
+            }
+            double elapsed = (System.nanoTime() - start) / 1e9;
+            if (last != null) {
+                LlmStats.record(new LlmStats.Call("chat", last.path("prompt_eval_count").asInt(),
+                        last.path("eval_count").asInt(), nanos(last, "load_duration"),
+                        nanos(last, "prompt_eval_duration"), nanos(last, "eval_duration"),
+                        nanos(last, "total_duration"), looped));
+            } else {
+                LlmStats.record(new LlmStats.Call("chat", 0, chunks, 0, 0, elapsed, elapsed, looped));
+            }
+            if (last == null && !looped && text.length() == 0) {
+                throw new LlmException("Respuesta de Ollama sin contenido");
+            }
+            boolean capped = last != null && "length".equals(last.path("done_reason").asText());
+            return new Attempt(text.toString(), looped, capped);
+        } catch (InterruptedIOException e) {
+            Thread.currentThread().interrupt();
+            throw new LlmException("Solicitud a Ollama interrumpida", e);
+        } catch (IOException e) {
+            throw new LlmException("No se pudo contactar con Ollama en " + baseUri + ": " + describe(e), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new LlmException("Solicitud a Ollama interrumpida", e);
         }
-        return content.asText();
+    }
+
+    private static double nanos(JsonNode resp, String field) {
+        return resp.path(field).asLong() / 1e9;
     }
 
     @Override
@@ -67,6 +173,7 @@ public final class OllamaClient implements LlmClient {
         }
         ObjectNode body = JSON.createObjectNode();
         body.put("model", embedModel);
+        body.put("keep_alive", keepAlive);
         ArrayNode arr = body.putArray("input");
         inputs.forEach(arr::add);
         JsonNode resp = post("api/embed", body);

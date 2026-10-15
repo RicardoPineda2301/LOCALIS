@@ -2,6 +2,7 @@ package com.localis.rag;
 
 import com.localis.llm.LlmClient;
 import com.localis.llm.LlmClient.Message;
+import com.localis.llm.LlmStats;
 import com.localis.rag.CitationVerifier.Citation;
 import java.util.ArrayList;
 import java.util.List;
@@ -36,6 +37,7 @@ public final class AnswerEngine {
     }
 
     public AnswerResult ask(String system, String user, Context ctx, String language) {
+        LlmStats.consumeTruncated();
         List<Message> messages = new ArrayList<>(List.of(Message.system(withLanguage(system, language)),
                 Message.user(user + "\n\n" + languageReminder(language))));
         String answer = enforceLanguage(llm.chat(messages), messages, language);
@@ -57,6 +59,10 @@ public final class AnswerEngine {
         }
 
         List<String> warnings = new ArrayList<>();
+        if (LlmStats.consumeTruncated()) {
+            warnings.add("La respuesta se interrumpio por alcanzar el limite de longitud; puede estar incompleta "
+                    + "o repetirse.");
+        }
         long unverified = citations.stream().filter(c -> !c.verified()).count();
         if (unverified > 0) {
             warnings.add(unverified + " cita(s) no pudieron verificarse contra el codigo; tratelas como no fiables.");

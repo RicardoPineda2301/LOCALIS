@@ -15,6 +15,8 @@ ollama.chatModel=codellama:13b-instruct
 ollama.embedModel=nomic-embed-text
 ollama.numCtx=8192
 ollama.timeoutSeconds=600
+# Cuanto tiempo mantiene Ollama el modelo cargado tras la ultima peticion (evita recargarlo en cada pregunta).
+ollama.keepAlive=30m
 
 # --- Modo sin internet: unicos hosts a los que LOCALIS puede conectarse ---
 network.allowedHosts=localhost,127.0.0.1,::1
@@ -35,6 +37,11 @@ branding.logo=
 # --- Retrieval ---
 retrieval.topK=8
 retrieval.maxContextChars=16000
+
+# --- Indexacion ---
+# Ya se ignoran de serie .git, node_modules, target, build, dist, vendor, .venv, site-packages y similares.
+# Aqui se pueden anadir nombres de carpeta propios del cliente (separados por comas) para no indexarlas.
+index.ignoreDirs=
 
 # --- Licencia (poner license.enforce=true en las builds para clientes) ---
 license.enforce=false

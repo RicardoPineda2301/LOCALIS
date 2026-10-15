@@ -68,7 +68,13 @@ public final class CitationVerifier {
             return new Citation(raw, cited, start, end, Status.FILE_NOT_FOUND);
         }
         if (matches.size() > 1) {
-            return new Citation(raw, cited, start, end, Status.AMBIGUOUS_FILE);
+            // Un nombre suelto ("queries.sql") puede coincidir con varios ficheros del repo, pero solo cuenta como
+            // cita ambigua si el modelo vio mas de uno: si solo tuvo delante uno de ellos, es ese.
+            List<String> seen = matches.stream().filter(p -> shown.containsKey(p)).toList();
+            if (seen.size() != 1) {
+                return new Citation(raw, cited, start, end, Status.AMBIGUOUS_FILE);
+            }
+            matches = seen;
         }
         String path = matches.get(0);
         if (start < 1 || end < start || end > lineCount.applyAsInt(path)) {

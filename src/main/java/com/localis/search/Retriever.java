@@ -129,6 +129,26 @@ public final class Retriever {
         }
     }
 
+    /** True si la estructura de busqueda esta construida y al dia (la proxima busqueda no tendra que esperarla). */
+    public boolean isWarm() {
+        Snapshot s = snapshot;
+        return s != null && s.generation() == store.generation();
+    }
+
+    /**
+     * Construye en segundo plano la estructura de busqueda. Con indices grandes cuesta varios segundos y, si no, los
+     * paga la primera pregunta tras abrir o reindexar.
+     */
+    public void warmUp() {
+        Thread.ofVirtual().name("localis-warmup").start(() -> {
+            try {
+                snapshot();
+            } catch (RuntimeException e) {
+                // el indice pudo cerrarse (cambio de repositorio): no hay nada que precalentar
+            }
+        });
+    }
+
     private Snapshot build(long generation) {
         List<CodeChunk> chunks = store.allChunks();
         int n = chunks.size();

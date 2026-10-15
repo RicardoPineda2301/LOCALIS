@@ -1,5 +1,6 @@
 package com.localis.api;
 
+import com.localis.llm.LlmStats;
 import com.localis.rag.Progress;
 import com.localis.workspace.Workspace;
 import java.util.ArrayList;
@@ -31,6 +32,7 @@ final class JobManager {
         volatile State state = State.RUNNING;
         volatile String progress = "Iniciando";
         volatile Object result;
+        volatile Map<String, Object> stats = Map.of();
         volatile Failure failure;
         volatile long finishedAt;
         volatile long lastPolled = System.currentTimeMillis();
@@ -74,8 +76,10 @@ final class JobManager {
     }
 
     private void run(Job job, Callable<Object> work) {
-        try (AutoCloseable ignored = Progress.bind(m -> job.progress = m)) {
+        try (AutoCloseable ignored = Progress.bind(m -> job.progress = m);
+                AutoCloseable stats = LlmStats.collect()) {
             Object r = work.call();
+            job.stats = LlmStats.summary();
             finish(job, State.DONE, r, null);
         } catch (CancellationException e) {
             finish(job, State.CANCELLED, null, null);
@@ -155,6 +159,7 @@ final class JobManager {
         out.put("elapsedSeconds", (end - j.startedAt) / 1000);
         if (j.state == State.DONE) {
             out.put("result", j.result);
+            out.put("stats", j.stats);
         }
         if (j.state == State.FAILED && j.failure != null) {
             out.put("error", j.failure.message());

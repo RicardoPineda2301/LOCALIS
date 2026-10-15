@@ -25,8 +25,11 @@ public final class RepositoryScanner {
 
     static final long MAX_FILE_BYTES = 1_000_000;
 
+    /** Dependencias y artefactos de terceros: indexarlos tarda mucho y llena las busquedas de codigo ajeno. */
     private static final Set<String> IGNORED_DIRS = Set.of(".git", ".svn", ".hg", ".idea", ".vscode", ".settings",
-            "target", "build", "bin", "obj", "out", "dist", "node_modules", "packages", ".gradle", "__pycache__");
+            "target", "build", "bin", "obj", "out", "dist", "node_modules", "packages", ".gradle", "__pycache__",
+            "vendor", ".venv", "venv", "site-packages", "bower_components", "jspm_packages", "pods", ".tox",
+            ".mypy_cache", ".pytest_cache", ".next", ".nuxt", ".angular", "coverage", ".cache", ".terraform");
 
     private static final Set<String> EXTENSIONS = Set.of(
             "java", "kt", "scala", "groovy", "cs", "vb", "sql", "pks", "pkb", "prc", "fnc", "trg", "xml", "properties",
@@ -41,9 +44,22 @@ public final class RepositoryScanner {
     public record Entry(String name, String path, boolean directory, boolean indexable, long size) {}
 
     private final Path root;
+    private final Set<String> ignored;
 
     public RepositoryScanner(Path root) {
+        this(root, List.of());
+    }
+
+    /** extraIgnored: nombres de carpeta adicionales a ignorar (sin distinguir mayusculas), ademas de los de serie. */
+    public RepositoryScanner(Path root, java.util.Collection<String> extraIgnored) {
         this.root = root.toAbsolutePath().normalize();
+        Set<String> all = new java.util.HashSet<>(IGNORED_DIRS);
+        extraIgnored.forEach(n -> all.add(n.trim().toLowerCase(Locale.ROOT)));
+        this.ignored = Set.copyOf(all);
+    }
+
+    private boolean isIgnoredDir(String name) {
+        return ignored.contains(name.toLowerCase(Locale.ROOT));
     }
 
     public Path root() {
@@ -73,7 +89,7 @@ public final class RepositoryScanner {
                     continue;
                 }
                 if (a.isDirectory()) {
-                    if (!IGNORED_DIRS.contains(name)) {
+                    if (!isIgnoredDir(name)) {
                         out.add(new Entry(name, relative(p), true, false, 0));
                     }
                 } else {
@@ -92,7 +108,7 @@ public final class RepositoryScanner {
         Files.walkFileTree(root, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                if (!dir.equals(root) && (IGNORED_DIRS.contains(dir.getFileName().toString())
+                if (!dir.equals(root) && (isIgnoredDir(dir.getFileName().toString())
                         || Files.isSymbolicLink(dir))) {
                     return FileVisitResult.SKIP_SUBTREE;
                 }
@@ -159,6 +175,9 @@ public final class RepositoryScanner {
 
     private static boolean hasSourceExtension(Path file) {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (name.contains(".min.")) {
+            return false; // js/css minificados: una sola linea enorme, sin valor para entender el codigo
+        }
         int dot = name.lastIndexOf('.');
         return dot > 0 && EXTENSIONS.contains(name.substring(dot + 1));
     }

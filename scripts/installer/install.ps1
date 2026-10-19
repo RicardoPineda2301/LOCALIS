@@ -20,7 +20,8 @@ param(
     [int]$MinJava = 25,
     [switch]$ForceJavaHome,
     [switch]$IgnoreExistingJava,
-    [switch]$SkipPath
+    [switch]$SkipPath,
+    [switch]$DownloadModels
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
@@ -144,15 +145,35 @@ exit /b %errorlevel%
     if (-not $ollama -and (Test-Path $bundled)) {
         Step 'Instalando Ollama incluido en el paquete'
         Start-Process $bundled -ArgumentList '/SILENT' -Wait
-    } elseif (-not $ollama) {
+        $ollama = Get-Command ollama.exe -ErrorAction SilentlyContinue
+    }
+    if (-not $ollama) {
         Write-Warning 'Ollama no esta instalado. LOCALIS lo necesita para el modelo de IA local (https://ollama.com).'
         Write-Warning 'Modelos por defecto: ollama pull mistralai/Devstral-Small-2-24B-Instruct-2512 ; ollama pull nomic-embed-text'
+    } else {
+        # Descargar modelos si se solicita
+        if ($DownloadModels) {
+            Step 'Descargando modelos de IA'
+            $models = @('mistralai/Devstral-Small-2-24B-Instruct-2512', 'nomic-embed-text')
+            foreach ($model in $models) {
+                Write-Host "  Descargando $model..." -ForegroundColor Cyan
+                $proc = Start-Process -FilePath 'ollama.exe' -ArgumentList "pull $model" -NoNewWindow -Wait -PassThru
+                if ($proc.ExitCode -ne 0) {
+                    Write-Warning "Falló la descarga de $model (código $($proc.ExitCode))"
+                } else {
+                    Write-Host "  $model descargado correctamente" -ForegroundColor Green
+                }
+            }
+        }
     }
 
     Write-Host ''
     Write-Host 'LOCALIS instalado correctamente.' -ForegroundColor Green
     Write-Host "  Configuracion : $cfg  (defina repo.path y, para clientes, license.enforce=true)"
     Write-Host '  Ejecutar      : abra una terminal NUEVA y escriba: localis'
+    if ($ollama -and -not $DownloadModels) {
+        Write-Host '  Modelos       : ejecute: ollama pull mistralai/Devstral-Small-2-24B-Instruct-2512; ollama pull nomic-embed-text' -ForegroundColor Yellow
+    }
 } catch {
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
     exit 1

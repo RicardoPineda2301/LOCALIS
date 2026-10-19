@@ -53,7 +53,7 @@ public record AppConfig(
                 Integer.parseInt(str(p, "server.port", "8080")),
                 str(p, "server.apiToken", ""),
                 str(p, "ollama.baseUrl", "http://localhost:11434"),
-                str(p, "ollama.chatModel", "codellama:13b-instruct"),
+                str(p, "ollama.chatModel", "mistralai/Devstral-Small-2-24B-Instruct-2512"),
                 str(p, "ollama.embedModel", "nomic-embed-text"),
                 Integer.parseInt(str(p, "ollama.numCtx", "8192")),
                 Integer.parseInt(str(p, "ollama.timeoutSeconds", "600")),

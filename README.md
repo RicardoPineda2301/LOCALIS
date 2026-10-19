@@ -29,7 +29,7 @@ verificarse se marca en `citations[].status` y en `warnings`.
 - Java 21 (para compilar: Maven 3.9+).
 - Ollama con un modelo de chat y uno de embeddings, por ejemplo:
   ```
-  ollama pull codellama:13b-instruct
+  ollama pull mistralai/Devstral-Small-2-24B-Instruct-2512
   ollama pull nomic-embed-text
   ```
   Los modelos se cambian en `localis.properties` (`ollama.chatModel`, `ollama.embedModel`). **Revise la licencia de cada

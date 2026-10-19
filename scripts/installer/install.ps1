@@ -146,7 +146,7 @@ exit /b %errorlevel%
         Start-Process $bundled -ArgumentList '/SILENT' -Wait
     } elseif (-not $ollama) {
         Write-Warning 'Ollama no esta instalado. LOCALIS lo necesita para el modelo de IA local (https://ollama.com).'
-        Write-Warning 'Modelos por defecto: ollama pull codellama:13b-instruct ; ollama pull nomic-embed-text'
+        Write-Warning 'Modelos por defecto: ollama pull mistralai/Devstral-Small-2-24B-Instruct-2512 ; ollama pull nomic-embed-text'
     }
 
     Write-Host ''

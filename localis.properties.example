@@ -11,7 +11,7 @@ server.apiToken=
 
 # --- Motor de IA local (Ollama) ---
 ollama.baseUrl=http://localhost:11434
-ollama.chatModel=codellama:13b-instruct
+ollama.chatModel=mistralai/Devstral-Small-2-24B-Instruct-2512
 ollama.embedModel=nomic-embed-text
 ollama.numCtx=8192
 ollama.timeoutSeconds=600

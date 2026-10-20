@@ -3,7 +3,9 @@ package com.localis.api;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.localis.config.AppConfig;
+import com.localis.docs.AutoDocumentationService;
 import com.localis.docs.DocumentationService;
+import com.localis.index.CodeChunk;
 import com.localis.index.Indexer;
 import com.localis.llm.LlmClient;
 import com.localis.llm.LlmException;
@@ -23,6 +25,7 @@ import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 import java.util.function.Predicate;
@@ -52,6 +55,8 @@ public final class ApiServer {
     record JobRequest(String type, String path, String question, String problem) {}
 
     record DocRequest(String template, String projectName, String version, String author, String team) {}
+
+    record AutoDocRequest(String projectName, String author, String team) {}
 
     private record Response(int status, String contentType, byte[] body, Map<String, String> headers) {
         static Response json(int status, Object o) throws IOException {
@@ -128,6 +133,51 @@ public final class ApiServer {
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document", doc.content(),
                     Map.of("Content-Disposition", "attachment; filename*=UTF-8''" + encoded));
         });
+        route("POST", "/api/docs/generate-auto", true, ex -> {
+            requireModule("docs");
+            AutoDocRequest r = body(ex, AutoDocRequest.class);
+            var workspace = d.workspace();
+            var indexer = workspace.indexer();
+            if (indexer == null || indexer.status().state() != com.localis.index.Indexer.State.DONE) {
+                return Response.json(409, Map.of("error", "El repositorio no esta indexado. Ejecute la indexacion primero."));
+            }
+            
+            // Obtener el nombre del proyecto del repositorio si no se proporciona
+            String projectName = r.projectName();
+            if (projectName == null || projectName.isBlank()) {
+                projectName = workspace.repo().map(Path::getFileName).map(Object::toString).orElse("Proyecto");
+            }
+            
+            // Verificar que hay plantillas disponibles
+            List<String> templates = d.docs().templates();
+            if (templates.isEmpty()) {
+                return Response.json(404, Map.of("error", "No hay plantillas de documentacion disponibles"));
+            }
+            
+            // Generar la documentacion usando el LLM y el código indexado
+            String content = generateAutoDocContent(workspace, d.llm(), d.config().maxContextChars());
+            
+            // Crear el documento usando el template
+            String templateName = templates.get(0);
+            String version = extractVersion(workspace);
+            String monthYear = java.time.LocalDate.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("MMMM yyyy", java.util.Locale.ENGLISH));
+            
+            // Generar el documento .docx
+            var doc = d.docs().generate(new DocumentationService.Request(
+                    templateName,
+                    projectName,
+                    version,
+                    r.author(),
+                    r.team()
+            ));
+            
+            String fileName = "Documentacion_" + projectName.replaceAll("[^\\p{L}\\p{N} _.-]", "") + ".docx";
+            String encoded = java.net.URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
+            return new Response(200,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document", doc.content(),
+                    Map.of("Content-Disposition", "attachment; filename*=UTF-8''" + encoded));
+        });
         server.createContext("/", new StaticFiles());
     }
 
@@ -143,6 +193,73 @@ public final class ApiServer {
     public void stop() {
         jobs.shutdown();
         server.stop(0);
+    }
+
+    private String generateAutoDocContent(Workspace workspace, LlmClient llm, int maxContextChars) {
+        try {
+            var indexer = workspace.indexer();
+            if (indexer == null) {
+                return "";
+            }
+            var status = indexer.status();
+            if (status.state() != com.localis.index.Indexer.State.DONE) {
+                return "";
+            }
+            // Usar el AutoDocumentationService
+            var store = getIndexStore(workspace);
+            var autoDoc = new AutoDocumentationService(llm, store, maxContextChars);
+            return autoDoc.generateArchitectureSummary();
+        } catch (Exception e) {
+            LOG.warn("Error generando contenido de documentacion automatica: {}", e.getMessage());
+            return "Error al generar documentacion automatica: " + e.getMessage();
+        }
+    }
+
+    private com.localis.index.IndexStore getIndexStore(Workspace workspace) {
+        // Esto es un hack para acceder al IndexStore
+        // En una implementacion correcta, Workspace debería exponer el IndexStore
+        try {
+            java.lang.reflect.Field stateField = workspace.getClass().getDeclaredField("state");
+            stateField.setAccessible(true);
+            Object state = stateField.get(workspace);
+            if (state != null) {
+                java.lang.reflect.Field storeField = state.getClass().getDeclaredField("store");
+                storeField.setAccessible(true);
+                return (com.localis.index.IndexStore) storeField.get(state);
+            }
+        } catch (Exception e) {
+            LOG.warn("No se pudo acceder al IndexStore: {}", e.getMessage());
+        }
+        throw new IllegalStateException("No se puede acceder al IndexStore");
+    }
+
+    private String extractVersion(Workspace workspace) {
+        try {
+            var store = getIndexStore(workspace);
+            var allPaths = store.filePaths();
+            for (String path : allPaths) {
+                if (path.contains("package.json") || path.contains("pom.xml") || 
+                    path.contains("build.gradle") || path.contains("README")) {
+                    var chunks = store.chunksOfFile(path);
+                    for (var chunk : chunks) {
+                        String[] lines = chunk.text().split("\n");
+                        for (String line : lines) {
+                            if (line.contains("version")) {
+                                String[] parts = line.split("[:=]");
+                                for (String part : parts) {
+                                    if (part.matches("\\d+\\.\\d+\\.\\d+")) {
+                                        return part;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.warn("Error extrayendo version: {}", e.getMessage());
+        }
+        return "1.0.0";
     }
 
     private Response health() throws IOException {

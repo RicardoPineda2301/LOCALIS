@@ -92,6 +92,8 @@ export type JobSnapshot = {
 
 export type JobRequest = { type: 'explain'; path?: string; question?: string } | { type: 'diagnose'; problem: string }
 
+export type AutoDocRequest = { projectName?: string; author?: string; team?: string }
+
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     const id = setTimeout(resolve, ms)
@@ -136,4 +138,6 @@ export const api = {
   explain: (question: string, path: string, signal?: AbortSignal) =>
     request<Answer>('POST', '/api/explain', { question: question || undefined, path: path || undefined }, signal),
   diagnose: (problem: string, signal?: AbortSignal) => request<Answer>('POST', '/api/diagnose', { problem }, signal),
+  generateAutoDoc: (req: AutoDocRequest, signal?: AbortSignal) =>
+    request<ArrayBuffer>('POST', '/api/docs/generate-auto', req, signal),
 }

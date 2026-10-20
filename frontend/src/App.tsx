@@ -58,6 +58,25 @@ export default function App() {
     setReindexSignal((n) => n + 1)
   }
 
+  const generateDocumentation = useCallback(async () => {
+    if (!workspace?.path) return
+    try {
+      const response = await api.generateAutoDoc({})
+      // Crear un blob y descargar el archivo
+      const blob = new Blob([response], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'Documentacion_Automatica.docx'
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+    } catch (e) {
+      onError(e)
+    }
+  }, [workspace, onError])
+
   return (
     <div className="app">
       <header className="topbar">
@@ -74,6 +93,7 @@ export default function App() {
             onConfigure={() => setPicking(true)}
             onChanged={refresh}
             onError={onError}
+            onGenerateDoc={generateDocumentation}
           />
           {workspace?.path && (
             <FileTree

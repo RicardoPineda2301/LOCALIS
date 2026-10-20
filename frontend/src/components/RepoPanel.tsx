@@ -9,6 +9,7 @@ type Props = {
   onChanged: () => void
   onError: (e: unknown) => void
   onGenerateDoc?: () => void
+  generatingDoc?: boolean
 }
 
 const STATE_LABEL: Record<IndexStatus['state'], string> = {
@@ -19,7 +20,7 @@ const STATE_LABEL: Record<IndexStatus['state'], string> = {
   NOT_CONFIGURED: 'Sin repositorio',
 }
 
-export function RepoPanel({ workspace, health, reindexSignal, onConfigure, onChanged, onError, onGenerateDoc }: Props) {
+export function RepoPanel({ workspace, health, reindexSignal, onConfigure, onChanged, onError, onGenerateDoc, generatingDoc = false }: Props) {
   const [status, setStatus] = useState<IndexStatus | null>(null)
   const [error, setError] = useState('')
   const wasRunning = useRef(false)
@@ -102,8 +103,12 @@ export function RepoPanel({ workspace, health, reindexSignal, onConfigure, onCha
           </button>
         )}
         {repo && hasIndex && (
-          <button className="secondary" onClick={onGenerateDoc} disabled={running || !health?.llm.reachable}>
-            Generar documentación
+          <button
+            className="doc-btn"
+            onClick={onGenerateDoc}
+            disabled={running || generatingDoc || !health?.llm.reachable}
+          >
+            {generatingDoc ? 'Generando…' : 'Generar documentación'}
           </button>
         )}
       </div>

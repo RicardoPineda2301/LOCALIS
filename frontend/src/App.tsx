@@ -15,6 +15,7 @@ export default function App() {
   const [picking, setPicking] = useState(false)
   const [reindexSignal, setReindexSignal] = useState(0)
   const [filePath, setFilePath] = useState('')
+  const [generatingDoc, setGeneratingDoc] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -59,7 +60,8 @@ export default function App() {
   }
 
   const generateDocumentation = useCallback(async () => {
-    if (!workspace?.path) return
+    if (!workspace?.path || generatingDoc) return
+    setGeneratingDoc(true)
     try {
       const response = await api.generateAutoDoc({})
       // Crear un blob y descargar el archivo
@@ -74,8 +76,10 @@ export default function App() {
       document.body.removeChild(a)
     } catch (e) {
       onError(e)
+    } finally {
+      setGeneratingDoc(false)
     }
-  }, [workspace, onError])
+  }, [workspace, generatingDoc, onError])
 
   return (
     <div className="app">
@@ -94,6 +98,7 @@ export default function App() {
             onChanged={refresh}
             onError={onError}
             onGenerateDoc={generateDocumentation}
+            generatingDoc={generatingDoc}
           />
           {workspace?.path && (
             <FileTree

@@ -1,7 +1,7 @@
 # LOCALIS
 
 Asistente de IA **100% local** para comprender, documentar y diagnosticar código legacy. Corre en la máquina del cliente,
-sin internet, sobre [Ollama](https://ollama.com). Backend en Java 21 (frontend pendiente).
+sin internet, sobre [Ollama](https://ollama.com). Backend en Java 21 y frontend web (React) servido por el propio jar.
 
 ## Qué hace
 
@@ -11,6 +11,8 @@ sin internet, sobre [Ollama](https://ollama.com). Backend en Java 21 (frontend p
 | Explicar | `POST /api/explain` | `{"path": "src/.../Foo.java"}` y/o `{"question": "..."}`. Explica un fichero (por partes si es muy grande) o responde preguntas sobre el código. |
 | Diagnosticar | `POST /api/diagnose` | `{"problem": "la facturación genera mal el total"}`. Devuelve hipótesis con evidencia `[fichero:línea]`. No corrige código. |
 | Documentación | `GET /api/docs/templates`, `POST /api/docs/generate` | Genera el `.docx` de una plantilla con el logo, empresa, proyecto, versión y autor del cliente. |
+| Documentación automática | `POST /api/docs/generate-auto`, `GET .../status`, `GET .../result` | Rellena con IA las plantillas elegidas (texto, tablas y diagramas) a partir del repositorio indexado; elimina los apartados que no aplican y renumera. Con varias plantillas devuelve un `.zip`. Se ejecuta en segundo plano con progreso. |
+| Programar | `POST /api/job` con `{"type":"code","messages":[...]}` | Conversación directa con el modelo, sin limitarse al repositorio indexado. |
 | Estado | `GET /api/health` | Estado de Ollama, modelos instalados, índice y licencia. |
 
 ### Citas verificadas
@@ -34,6 +36,25 @@ verificarse se marca en `citations[].status` y en `warnings`.
   ```
   Los modelos se cambian en `localis.properties` (`ollama.chatModel`, `ollama.embedModel`). **Revise la licencia de cada
   modelo antes de distribuirlo comercialmente.**
+
+## Rama `experimental`
+Rama para probar y desarrollar sin compromisos: no lleva claves, licencias, rutas ni datos de ningún cliente.
+`localis.properties`, `license.json`, `data/` y las claves están en `.gitignore`; cada desarrollador usa los suyos.
+
+Arranque rápido (Windows, macOS o Linux; requiere Java 21+, Maven 3.9+, Node 20+ y Ollama):
+```
+ollama pull qwen2.5-coder:7b          # o qwen2.5-coder:14b si hay memoria; y el de embeddings:
+ollama pull nomic-embed-text
+cd frontend && npm install && npm run build && cd ..      # el frontend se empaqueta dentro del jar
+mvn -B -q clean package -DskipTests
+cp localis.properties.example localis.properties           # Windows: copy ...
+# edite localis.properties: ollama.chatModel=qwen2.5-coder:7b  (el valor por defecto, Devstral 24B, exige mucha memoria)
+java --enable-native-access=ALL-UNNAMED -jar target/localis.jar localis.properties
+```
+Abra http://127.0.0.1:8080, pulse **Configurar** y elija el repositorio a analizar.
+
+Orientación de modelos: 8-16 GB de memoria -> `qwen2.5-coder:7b`; 16-24 GB -> `qwen2.5-coder:14b`.
+`license.enforce=false` por defecto: la licencia solo se exige en las builds para clientes.
 
 ## Uso
 ```

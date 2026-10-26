@@ -73,6 +73,8 @@ class OllamaClientTest {
     private OllamaClient client(String baseUrl) {
         Properties p = new Properties();
         p.setProperty("ollama.baseUrl", baseUrl);
+        // Fijado aqui para que el test no dependa del modelo por defecto de la aplicacion
+        p.setProperty("ollama.chatModel", "codellama:13b-instruct");
         return new OllamaClient(AppConfig.from(p), new NetworkGuard(List.of("localhost", "127.0.0.1", "::1")));
     }
 

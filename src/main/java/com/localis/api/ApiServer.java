@@ -52,11 +52,13 @@ public final class ApiServer {
     record WorkspaceRequest(String path) {}
 
     /** type: "explain" (path y/o question) o "diagnose" (problem). */
-    record JobRequest(String type, String path, String question, String problem) {}
+    record JobRequest(String type, String path, String question, String problem, List<ChatTurn> messages) {}
+
+    record ChatTurn(String role, String content) {}
 
     record DocRequest(String template, String projectName, String version, String author, String team) {}
 
-    record AutoDocRequest(String projectName, String author, String team) {}
+    record AutoDocRequest(String projectName, String author, String team, List<String> templates) {}
 
     private record Response(int status, String contentType, byte[] body, Map<String, String> headers) {
         static Response json(int status, Object o) throws IOException {
@@ -133,6 +135,7 @@ public final class ApiServer {
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document", doc.content(),
                     Map.of("Content-Disposition", "attachment; filename*=UTF-8''" + encoded));
         });
+        // Generacion larga (varios minutos): se lanza en segundo plano y el cliente consulta el progreso.
         route("POST", "/api/docs/generate-auto", true, ex -> {
             requireModule("docs");
             AutoDocRequest r = body(ex, AutoDocRequest.class);
@@ -141,44 +144,140 @@ public final class ApiServer {
             if (indexer == null || indexer.status().state() != com.localis.index.Indexer.State.DONE) {
                 return Response.json(409, Map.of("error", "El repositorio no esta indexado. Ejecute la indexacion primero."));
             }
-            
-            // Obtener el nombre del proyecto del repositorio si no se proporciona
-            String projectName = r.projectName();
-            if (projectName == null || projectName.isBlank()) {
-                projectName = workspace.repo().map(Path::getFileName).map(Object::toString).orElse("Proyecto");
-            }
-            
-            // Verificar que hay plantillas disponibles
             List<String> templates = d.docs().templates();
             if (templates.isEmpty()) {
                 return Response.json(404, Map.of("error", "No hay plantillas de documentacion disponibles"));
             }
-            
-            // Generar la documentacion usando el LLM y el código indexado
-            String content = generateAutoDocContent(workspace, d.llm(), d.config().maxContextChars());
-            
-            // Crear el documento usando el template
-            String templateName = templates.get(0);
+            // Solo se generan las plantillas elegidas
+            List<String> chosen = r.templates() == null ? List.of() : r.templates().stream().distinct().toList();
+            if (chosen.isEmpty()) {
+                return Response.json(400, Map.of("error", "Seleccione al menos un documento"));
+            }
+            for (String t : chosen) {
+                if (!templates.contains(t)) {
+                    return Response.json(404, Map.of("error", "Plantilla desconocida: " + t));
+                }
+            }
+            synchronized (docLock) {
+                if ("RUNNING".equals(docStatus.state())) {
+                    return Response.json(409, Map.of("error", "Ya hay una documentacion generandose"));
+                }
+                docStatus = new DocStatus("RUNNING", "Preparando…", 0, null, null);
+                docResult = null;
+            }
+            String projectName = r.projectName() == null || r.projectName().isBlank()
+                    ? workspace.repo().map(Path::getFileName).map(Object::toString).orElse("Proyecto")
+                    : r.projectName();
+            var store = getIndexStore(workspace);
             String version = extractVersion(workspace);
-            String monthYear = java.time.LocalDate.now().format(
-                    java.time.format.DateTimeFormatter.ofPattern("MMMM yyyy", java.util.Locale.ENGLISH));
-            
-            // Generar el documento .docx
-            var doc = d.docs().generate(new DocumentationService.Request(
-                    templateName,
-                    projectName,
-                    version,
-                    r.author(),
-                    r.team()
-            ));
-            
-            String fileName = "Documentacion_" + projectName.replaceAll("[^\\p{L}\\p{N} _.-]", "") + ".docx";
-            String encoded = java.net.URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
-            return new Response(200,
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document", doc.content(),
-                    Map.of("Content-Disposition", "attachment; filename*=UTF-8''" + encoded));
+            docExecutor.submit(() -> runAutoDoc(r, projectName, chosen, store, version));
+            return Response.json(202, docStatus);
+        });
+        route("GET", "/api/docs/generate-auto/status", true, ex -> Response.json(200, docStatus));
+        route("GET", "/api/docs/generate-auto/result", true, ex -> {
+            byte[] bytes = docResult;
+            if (bytes == null || !"DONE".equals(docStatus.state())) {
+                return Response.json(409, Map.of("error", "No hay ninguna documentacion lista"));
+            }
+            String name = docStatus.fileName();
+            String encoded = java.net.URLEncoder.encode(name, StandardCharsets.UTF_8).replace("+", "%20");
+            String type = name.endsWith(".zip") ? "application/zip"
+                    : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            return new Response(200, type, bytes, Map.of("Content-Disposition", "attachment; filename*=UTF-8''" + encoded));
         });
         server.createContext("/", new StaticFiles());
+    }
+
+    private record DocStatus(String state, String progress, int percent, String error, String fileName) {}
+
+    private final Object docLock = new Object();
+    private final java.util.concurrent.ExecutorService docExecutor = Executors.newSingleThreadExecutor();
+    private volatile DocStatus docStatus = new DocStatus("IDLE", "", 0, null, null);
+    private volatile byte[] docResult;
+
+    private void setDocProgress(String text, int percent) {
+        docStatus = new DocStatus("RUNNING", text, Math.min(99, percent), null, null);
+    }
+
+    private void runAutoDoc(AutoDocRequest r, String projectName, List<String> templateIds,
+            com.localis.index.IndexStore store, String version) {
+        try {
+            var autoDoc = new AutoDocumentationService(d.llm(), store, d.config().maxContextChars());
+            int n = templateIds.size();
+
+            // Reparto del avance: 0-5% analisis del proyecto (una vez) y el resto a partes iguales entre plantillas
+            setDocProgress("Analizando el proyecto…", 1);
+            String summary = autoDoc.generateArchitectureSummary();
+            String today = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+
+            var docs = new java.util.ArrayList<DocumentationService.Document>();
+            var failures = new java.util.ArrayList<String>();
+            for (int k = 0; k < n; k++) {
+                final double base = 5 + 95.0 * k / n;
+                final double span = 95.0 / n;
+                final String label = n > 1 ? "[" + (k + 1) + "/" + n + "] " + templateIds.get(k).replaceFirst("^\\d+\\.\\s*", "") + ": " : "";
+                try {
+                    docs.add(buildAutoDoc(autoDoc, templateIds.get(k), r, projectName, version, summary, today,
+                            (text, fraction) -> setDocProgress(label + text, (int) (base + fraction * span))));
+                } catch (Exception e) {
+                    LOG.warn("Error generando la plantilla {}", templateIds.get(k), e);
+                    failures.add(templateIds.get(k) + ": " + (e.getMessage() == null ? e.toString() : e.getMessage()));
+                }
+            }
+            if (docs.isEmpty()) {
+                throw new IllegalStateException(String.join("; ", failures));
+            }
+
+            if (docs.size() == 1 && n == 1) {
+                docResult = docs.get(0).content();
+                docStatus = new DocStatus("DONE", "Documento listo", 100, null, docs.get(0).fileName());
+            } else {
+                var zip = new java.io.ByteArrayOutputStream();
+                try (var out = new java.util.zip.ZipOutputStream(zip)) {
+                    for (var doc : docs) {
+                        out.putNextEntry(new java.util.zip.ZipEntry(doc.fileName()));
+                        out.write(doc.content());
+                        out.closeEntry();
+                    }
+                }
+                docResult = zip.toByteArray();
+                String zipName = "Documentacion_" + projectName.replaceAll("[^\\p{L}\\p{N} _.-]", "") + ".zip";
+                String note = failures.isEmpty() ? "Documentos listos"
+                        : "Listo, pero " + failures.size() + " plantilla(s) fallaron";
+                docStatus = new DocStatus("DONE", note, 100, null, zipName);
+            }
+        } catch (Exception e) {
+            LOG.warn("Error generando la documentacion automatica", e);
+            docStatus = new DocStatus("FAILED", "", 0, e.getMessage() == null ? e.toString() : e.getMessage(), null);
+        }
+    }
+
+    /** Personaliza una plantilla y rellena sus marcadores y diagramas. El avance se informa de 0 a 1. */
+    private DocumentationService.Document buildAutoDoc(AutoDocumentationService autoDoc, String templateId,
+            AutoDocRequest r, String projectName, String version, String summary, String today,
+            java.util.function.BiConsumer<String, Double> progress) throws Exception {
+        var doc = d.docs().generate(new DocumentationService.Request(
+                templateId,
+                projectName,
+                version,
+                r.author() == null || r.author().isBlank() ? "LOCALIS" : r.author(),
+                r.team() == null || r.team().isBlank() ? "LOCALIS" : r.team()
+        ));
+
+        // Los marcadores [..] restantes de la plantilla se sustituyen en su sitio, sea cual sea la plantilla
+        byte[] bytes = doc.content();
+        var slots = com.localis.docs.DocxTemplateEngine.extractSlots(bytes);
+        var boxes = com.localis.docs.DocxTemplateEngine.extractDiagrams(bytes);
+
+        // Dentro de cada plantilla: 0-70% texto, 70-97% diagramas, resto montaje
+        autoDoc.onProgress((text, fraction) ->
+                progress.accept(text, text.startsWith("Dibujando") ? 0.7 + fraction * 0.27 : fraction * 0.7));
+        var values = autoDoc.fillSlots(slots, summary, today, version);
+        var diagrams = autoDoc.generateDiagrams(boxes, summary);
+
+        progress.accept("Montando el documento…", 0.98);
+        return new DocumentationService.Document(doc.fileName(),
+                com.localis.docs.DocxTemplateEngine.applySlots(bytes, values, diagrams));
     }
 
     public void start() {
@@ -192,27 +291,8 @@ public final class ApiServer {
 
     public void stop() {
         jobs.shutdown();
+        docExecutor.shutdownNow();
         server.stop(0);
-    }
-
-    private String generateAutoDocContent(Workspace workspace, LlmClient llm, int maxContextChars) {
-        try {
-            var indexer = workspace.indexer();
-            if (indexer == null) {
-                return "";
-            }
-            var status = indexer.status();
-            if (status.state() != com.localis.index.Indexer.State.DONE) {
-                return "";
-            }
-            // Usar el AutoDocumentationService
-            var store = getIndexStore(workspace);
-            var autoDoc = new AutoDocumentationService(llm, store, maxContextChars);
-            return autoDoc.generateArchitectureSummary();
-        } catch (Exception e) {
-            LOG.warn("Error generando contenido de documentacion automatica: {}", e.getMessage());
-            return "Error al generar documentacion automatica: " + e.getMessage();
-        }
     }
 
     private com.localis.index.IndexStore getIndexStore(Workspace workspace) {
@@ -322,8 +402,66 @@ public final class ApiServer {
             requireModule("diagnose");
             var service = d.workspace().diagnose();
             return () -> answerMap(service.diagnose(r.problem(), lang), true);
+        } else if ("code".equals(r.type())) {
+            requireModule("explain");
+            List<LlmClient.Message> history = codeHistory(r.messages());
+            var llm = d.llm();
+            return () -> codeAnswer(llm, history);
         }
-        throw new IllegalArgumentException("'type' debe ser 'explain' o 'diagnose'");
+        throw new IllegalArgumentException("'type' debe ser 'explain', 'diagnose' o 'code'");
+    }
+
+    private static final String CODE_SYSTEM = """
+            You are an expert software engineer and programming assistant.
+            Answer in the same language as the user's message.
+            When code is requested, give complete, working code in fenced Markdown blocks that name the language,
+            followed by a short explanation. If a requirement is ambiguous, state your assumption briefly instead of
+            asking several questions.
+            """;
+
+    /** Conversacion de la pestana Programar: se recorta por lo mas antiguo para que quepa en el contexto del modelo. */
+    private List<LlmClient.Message> codeHistory(List<ChatTurn> turns) {
+        if (turns == null || turns.isEmpty() || !"user".equals(turns.get(turns.size() - 1).role())) {
+            throw new IllegalArgumentException("Indique un mensaje de usuario en 'messages'");
+        }
+        int budget = Math.max(2000, (d.config().numCtx() - d.config().maxTokens() - 500) * 3 - CODE_SYSTEM.length());
+        var kept = new java.util.ArrayDeque<LlmClient.Message>();
+        int used = 0;
+        for (int i = turns.size() - 1; i >= 0; i--) {
+            ChatTurn t = turns.get(i);
+            if (!("user".equals(t.role()) || "assistant".equals(t.role())) || t.content() == null || t.content().isBlank()) {
+                throw new IllegalArgumentException("'messages' solo admite turnos 'user' y 'assistant' con texto");
+            }
+            used += t.content().length();
+            if (used > budget) {
+                if (kept.isEmpty()) {
+                    throw new IllegalArgumentException("El mensaje es demasiado largo para el contexto del modelo");
+                }
+                break;
+            }
+            kept.addFirst(new LlmClient.Message(t.role(), t.content()));
+        }
+        var all = new java.util.ArrayList<LlmClient.Message>();
+        all.add(LlmClient.Message.system(CODE_SYSTEM));
+        all.addAll(kept);
+        return all;
+    }
+
+    private Map<String, Object> codeAnswer(LlmClient llm, List<LlmClient.Message> messages) {
+        com.localis.llm.LlmStats.consumeTruncated();
+        com.localis.rag.Progress.report("Consultando al modelo");
+        String text = llm.chat(messages);
+        List<String> warnings = com.localis.llm.LlmStats.consumeTruncated()
+                ? List.of("La respuesta se cortó por el límite de longitud (ollama.maxTokens). Pida que continúe.")
+                : List.of();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("answer", text);
+        out.put("allCitationsVerified", true);
+        out.put("citations", List.of());
+        out.put("snippets", List.of());
+        out.put("sources", List.of());
+        out.put("warnings", warnings);
+        return out;
     }
 
     private JobManager.Job jobOrNotFound(HttpExchange ex, boolean cancel) {

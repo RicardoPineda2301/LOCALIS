@@ -6,6 +6,7 @@ import { FileTree } from './components/FileTree'
 import { FolderPicker } from './components/FolderPicker'
 import { Chat } from './components/Chat'
 import { TokenDialog } from './components/TokenDialog'
+import { DocPickerDialog } from './components/DocPickerDialog'
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
@@ -16,6 +17,10 @@ export default function App() {
   const [reindexSignal, setReindexSignal] = useState(0)
   const [filePath, setFilePath] = useState('')
   const [generatingDoc, setGeneratingDoc] = useState(false)
+  const [docProgress, setDocProgress] = useState<{ percent: number; text: string } | null>(null)
+  const [docError, setDocError] = useState('')
+  const [docTemplates, setDocTemplates] = useState<string[]>([])
+  const [pickingDocs, setPickingDocs] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -41,6 +46,7 @@ export default function App() {
   useEffect(() => {
     void refresh()
     void loadWorkspace()
+    api.docTemplates().then(setDocTemplates).catch(() => setDocTemplates([]))
     const id = setInterval(() => void refresh(), 10_000)
     return () => clearInterval(id)
   }, [refresh, loadWorkspace])
@@ -59,25 +65,46 @@ export default function App() {
     setReindexSignal((n) => n + 1)
   }
 
-  const generateDocumentation = useCallback(async () => {
-    if (!workspace?.path || generatingDoc) return
+  const generateDocumentation = useCallback(async (selected: string[]) => {
+    if (!workspace?.path || generatingDoc || selected.length === 0) return
+    setPickingDocs(false)
     setGeneratingDoc(true)
+    setDocError('')
+    setDocProgress({ percent: 0, text: 'Preparando…' })
     try {
-      const response = await api.generateAutoDoc({})
-      // Crear un blob y descargar el archivo
-      const blob = new Blob([response], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+      try {
+        await api.startAutoDoc({ templates: selected })
+      } catch (e) {
+        // Si ya hay una generación en curso (p. ej. tras recargar la página) se sigue su progreso
+        if (!(e instanceof ApiError && e.status === 409 && e.message.startsWith('Ya hay'))) throw e
+      }
+      let fileName = 'Documentacion_Automatica.docx'
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1000))
+        const st = await api.autoDocStatus()
+        if (st.state === 'FAILED') throw new Error(st.error ?? 'No se pudo generar la documentación')
+        if (st.state === 'DONE') {
+          if (st.fileName) fileName = st.fileName
+          break
+        }
+        setDocProgress({ percent: st.percent, text: st.progress })
+      }
+      setDocProgress({ percent: 100, text: 'Descargando…' })
+      const blob = await api.autoDocResult()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = 'Documentacion_Automatica.docx'
+      a.download = fileName
       document.body.appendChild(a)
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
     } catch (e) {
       onError(e)
+      setDocError(e instanceof Error ? e.message : 'No se pudo generar la documentación')
     } finally {
       setGeneratingDoc(false)
+      setDocProgress(null)
     }
   }, [workspace, generatingDoc, onError])
 
@@ -97,8 +124,11 @@ export default function App() {
             onConfigure={() => setPicking(true)}
             onChanged={refresh}
             onError={onError}
-            onGenerateDoc={generateDocumentation}
+            onGenerateDoc={() => setPickingDocs(true)}
             generatingDoc={generatingDoc}
+            docProgress={docProgress}
+            docError={docError}
+            docAvailable={docTemplates.length > 0}
           />
           {workspace?.path && (
             <FileTree
@@ -120,6 +150,13 @@ export default function App() {
       </main>
       {picking && (
         <FolderPicker initialPath={workspace?.path ?? null} onChoose={chooseRepo} onClose={() => setPicking(false)} />
+      )}
+      {pickingDocs && (
+        <DocPickerDialog
+          templates={docTemplates}
+          onConfirm={(selected) => void generateDocumentation(selected)}
+          onCancel={() => setPickingDocs(false)}
+        />
       )}
       {needsToken && (
         <TokenDialog

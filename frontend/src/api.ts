@@ -90,9 +90,20 @@ export type JobSnapshot = {
   status?: number
 }
 
-export type JobRequest = { type: 'explain'; path?: string; question?: string } | { type: 'diagnose'; problem: string }
+export type ChatTurn = { role: 'user' | 'assistant'; content: string }
+export type JobRequest =
+  | { type: 'explain'; path?: string; question?: string }
+  | { type: 'diagnose'; problem: string }
+  | { type: 'code'; messages: ChatTurn[] }
 
-export type AutoDocRequest = { projectName?: string; author?: string; team?: string }
+export type AutoDocRequest = { projectName?: string; author?: string; team?: string; templates?: string[] }
+export type AutoDocStatus = {
+  state: 'IDLE' | 'RUNNING' | 'DONE' | 'FAILED'
+  progress: string
+  percent: number
+  error?: string
+  fileName?: string
+}
 
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -138,6 +149,15 @@ export const api = {
   explain: (question: string, path: string, signal?: AbortSignal) =>
     request<Answer>('POST', '/api/explain', { question: question || undefined, path: path || undefined }, signal),
   diagnose: (problem: string, signal?: AbortSignal) => request<Answer>('POST', '/api/diagnose', { problem }, signal),
-  generateAutoDoc: (req: AutoDocRequest, signal?: AbortSignal) =>
-    request<ArrayBuffer>('POST', '/api/docs/generate-auto', req, signal),
+  docTemplates: () => request<string[]>('GET', '/api/docs/templates'),
+  startAutoDoc: (req: AutoDocRequest) => request<AutoDocStatus>('POST', '/api/docs/generate-auto', req),
+  autoDocStatus: () => request<AutoDocStatus>('GET', '/api/docs/generate-auto/status'),
+  autoDocResult: async (): Promise<Blob> => {
+    const headers: Record<string, string> = {}
+    const token = getToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch('/api/docs/generate-auto/result', { headers })
+    if (!res.ok) throw new ApiError(res.status, `Error ${res.status}`)
+    return res.blob()
+  },
 }

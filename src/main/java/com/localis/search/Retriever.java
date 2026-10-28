@@ -22,7 +22,8 @@ public final class Retriever {
     public record Hit(CodeChunk chunk, double score) {}
 
     private record Snapshot(long generation, List<CodeChunk> chunks, float[][] unitVectors,
-            List<Map<String, Integer>> tf, int[] lengths, Map<String, Integer> df, double avgLength) {}
+            List<Map<String, Integer>> tf, int[] lengths, Map<String, Integer> df, double avgLength,
+            double[] weights) {}
 
     private final IndexStore store;
     private final LlmClient llm;
@@ -41,6 +42,8 @@ public final class Retriever {
         Map<Integer, Double> fused = new HashMap<>();
         addRanks(fused, bm25Ranking(s, query));
         addRanks(fused, vectorRanking(s, query));
+        // copias, historicos y versiones anteriores de un objeto SQL pesan menos (ChunkWeights)
+        fused.replaceAll((i, score) -> score * s.weights()[i]);
 
         return fused.entrySet().stream()
                 .sorted(Map.Entry.<Integer, Double>comparingByValue(Comparator.reverseOrder()))
@@ -168,7 +171,8 @@ public final class Retriever {
             total += lengths[i];
             tf.keySet().forEach(t -> df.merge(t, 1, Integer::sum));
         }
-        return new Snapshot(generation, chunks, vectors, tfs, lengths, df, n == 0 ? 1 : (double) total / n);
+        return new Snapshot(generation, chunks, vectors, tfs, lengths, df, n == 0 ? 1 : (double) total / n,
+                ChunkWeights.compute(chunks));
     }
 
     private static float[] unit(float[] v) {

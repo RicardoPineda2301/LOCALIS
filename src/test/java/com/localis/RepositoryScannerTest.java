@@ -9,6 +9,7 @@ import com.localis.index.RepositoryScanner;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -60,5 +61,50 @@ class RepositoryScannerTest {
         assertEquals(List.of(), AppConfig.from(p).indexIgnoreDirs());
         p.setProperty("index.ignoreDirs", "legacy, , generated ,docs");
         assertEquals(List.of("legacy", "generated", "docs"), AppConfig.from(p).indexIgnoreDirs());
+    }
+
+    @Test
+    void modernJavaScriptAndComponentFilesAreIndexed() throws Exception {
+        for (String f : List.of("src/App.jsx", "src/Panel.tsx", "src/util.mjs", "src/legacy.cjs", "src/Card.vue",
+                "src/Widget.svelte", "src/index.ts", "src/old.js")) {
+            file(f);
+        }
+        assertEquals(Set.of("src/App.jsx", "src/Panel.tsx", "src/util.mjs", "src/legacy.cjs", "src/Card.vue",
+                "src/Widget.svelte", "src/index.ts", "src/old.js"), scan(new RepositoryScanner(tmp)));
+        assertTrue(new RepositoryScanner(tmp).list("src").stream().allMatch(RepositoryScanner.Entry::indexable));
+    }
+
+    @Test
+    void omittedFilesAreCountedByReasonSoCoverageIsVisible() throws Exception {
+        file("src/App.java");
+        file("img/a.png");
+        file("img/b.png");
+        file("docs/manual.pdf");
+        file(".env");
+        file("Makefile");
+        file("web/app.min.js");
+        file("node_modules/dep/ignored.png"); // carpeta ignorada de serie: no se cuenta
+        Files.createDirectories(tmp.resolve("empty"));
+        Files.writeString(tmp.resolve("empty/zero.java"), ""); // vacio: ni se indexa ni se reporta
+        Path big = tmp.resolve("src/Huge.sql");
+        Files.write(big, new byte[(int) RepositoryScanner.MAX_FILE_BYTES + 1]);
+
+        RepositoryScanner.Scan scan = new RepositoryScanner(tmp).scanAll();
+
+        assertEquals(List.of("src/App.java"),
+                scan.files().stream().map(RepositoryScanner.SourceFile::relativePath).toList());
+        RepositoryScanner.Omitted omitted = scan.omitted();
+        assertEquals(Map.of("png", 2, "pdf", 1, ".env", 1, "(sin extension)", 1, "min.js", 1), omitted.byExtension());
+        assertEquals(List.of("png"), omitted.byExtension().keySet().stream().limit(1).toList(),
+                "la extension mas frecuente va primero");
+        assertEquals(1, omitted.tooLarge());
+        assertEquals(List.of("src/Huge.sql"), omitted.tooLargeSamples());
+    }
+
+    @Test
+    void scanWithoutOmissionsReportsEmptyCounts() throws Exception {
+        file("src/App.java");
+        RepositoryScanner.Omitted omitted = new RepositoryScanner(tmp).scanAll().omitted();
+        assertEquals(RepositoryScanner.Omitted.none(), omitted);
     }
 }

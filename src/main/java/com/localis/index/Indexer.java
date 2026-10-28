@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,14 +19,30 @@ public final class Indexer {
 
     public enum State { IDLE, RUNNING, DONE, FAILED }
 
+    /**
+     * Estado de la indexacion. filesSkipped = sin cambios desde la ultima vez; filesBinary = con extension de texto
+     * pero contenido binario; los campos omitted* describen lo que el escaneo dejo fuera (ver
+     * RepositoryScanner.Omitted), para que la cobertura del indice sea visible.
+     */
     public record Status(State state, int filesTotal, int filesDone, int filesSkipped, int filesFailed,
-            boolean embeddingsAvailable, String message) {}
+            int filesBinary, boolean embeddingsAvailable, String message, Map<String, Integer> omittedByExtension,
+            int omittedTooLarge, List<String> omittedTooLargeSamples) {
+
+        static Status of(State state, String message) {
+            return new Status(state, 0, 0, 0, 0, 0, true, message, Map.of(), 0, List.of());
+        }
+
+        Status with(State state, String message) {
+            return new Status(state, filesTotal, filesDone, filesSkipped, filesFailed, filesBinary,
+                    embeddingsAvailable, message, omittedByExtension, omittedTooLarge, omittedTooLargeSamples);
+        }
+    }
 
     private final RepositoryScanner scanner;
     private final IndexStore store;
     private final LlmClient llm;
     private final Chunker chunker = new Chunker();
-    private volatile Status status = new Status(State.IDLE, 0, 0, 0, 0, true, "");
+    private volatile Status status = Status.of(State.IDLE, "");
     private Thread worker;
     private volatile Runnable onFinished = () -> { };
 
@@ -49,16 +66,14 @@ public final class Indexer {
         if (status.state() == State.RUNNING) {
             return false;
         }
-        status = new Status(State.RUNNING, 0, 0, 0, 0, true, "Escaneando repositorio");
+        status = Status.of(State.RUNNING, "Escaneando repositorio");
         worker = Thread.ofVirtual().name("localis-indexer").start(() -> {
             try {
                 run();
                 onFinished.run();
             } catch (Exception e) {
                 LOG.error("Fallo la indexacion", e);
-                Status s = status;
-                status = new Status(State.FAILED, s.filesTotal(), s.filesDone(), s.filesSkipped(),
-                        s.filesFailed(), s.embeddingsAvailable(), String.valueOf(e.getMessage()));
+                status = status.with(State.FAILED, String.valueOf(e.getMessage()));
             }
         });
         return true;
@@ -77,12 +92,16 @@ public final class Indexer {
 
     /** Indexa de forma sincrona (usado por el hilo de fondo). */
     void run() throws IOException {
-        List<RepositoryScanner.SourceFile> files = scanner.scan();
+        RepositoryScanner.Scan scan = scanner.scanAll();
+        List<RepositoryScanner.SourceFile> files = scan.files();
+        RepositoryScanner.Omitted omitted = scan.omitted();
         int done = 0;
         int skipped = 0;
         int failed = 0;
+        int binary = 0;
         boolean embeddingsOk = true;
-        status = new Status(State.RUNNING, files.size(), 0, 0, 0, true, "Indexando");
+        status = new Status(State.RUNNING, files.size(), 0, 0, 0, 0, true, "Indexando", omitted.byExtension(),
+                omitted.tooLarge(), omitted.tooLargeSamples());
 
         Set<String> present = new HashSet<>();
         for (RepositoryScanner.SourceFile sf : files) {
@@ -96,7 +115,7 @@ public final class Indexer {
                 } else {
                     String text = RepositoryScanner.decode(bytes);
                     if (text == null) {
-                        skipped++;
+                        binary++;
                     } else {
                         List<CodeChunk> chunks = chunker.chunk(sf.relativePath(), text);
                         boolean embedded = false;
@@ -118,7 +137,8 @@ public final class Indexer {
                 LOG.warn("No se pudo indexar {}: {}", sf.relativePath(), e.getMessage());
             }
             done++;
-            status = new Status(State.RUNNING, files.size(), done, skipped, failed, embeddingsOk, "Indexando");
+            status = new Status(State.RUNNING, files.size(), done, skipped, failed, binary, embeddingsOk, "Indexando",
+                    omitted.byExtension(), omitted.tooLarge(), omitted.tooLargeSamples());
         }
 
         for (String old : new ArrayList<>(store.filePaths())) {
@@ -126,8 +146,9 @@ public final class Indexer {
                 store.deleteFile(old);
             }
         }
-        status = new Status(State.DONE, files.size(), done, skipped, failed, embeddingsOk,
-                embeddingsOk ? "Indice actualizado" : "Indice actualizado sin embeddings (solo busqueda por palabras)");
+        status = new Status(State.DONE, files.size(), done, skipped, failed, binary, embeddingsOk,
+                embeddingsOk ? "Indice actualizado" : "Indice actualizado sin embeddings (solo busqueda por palabras)",
+                omitted.byExtension(), omitted.tooLarge(), omitted.tooLargeSamples());
     }
 
     private List<CodeChunk> embedAll(List<CodeChunk> chunks) {

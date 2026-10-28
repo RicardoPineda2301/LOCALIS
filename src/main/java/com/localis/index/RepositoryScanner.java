@@ -16,14 +16,16 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /** Recorre el repositorio del cliente y lee los fuentes de forma segura (sin seguir enlaces simbolicos). */
 public final class RepositoryScanner {
 
-    static final long MAX_FILE_BYTES = 1_000_000;
+    public static final long MAX_FILE_BYTES = 1_000_000;
 
     /** Dependencias y artefactos de terceros: indexarlos tarda mucho y llena las busquedas de codigo ajeno. */
     private static final Set<String> IGNORED_DIRS = Set.of(".git", ".svn", ".hg", ".idea", ".vscode", ".settings",
@@ -33,12 +35,34 @@ public final class RepositoryScanner {
 
     private static final Set<String> EXTENSIONS = Set.of(
             "java", "kt", "scala", "groovy", "cs", "vb", "sql", "pks", "pkb", "prc", "fnc", "trg", "xml", "properties",
-            "yml", "yaml", "gradle", "md", "js", "ts", "py", "sh", "bat", "cmd", "ps1", "cbl", "cob", "cpy", "jsp",
-            "html", "aspx", "ascx", "cshtml", "config", "cfg", "ini", "txt", "c", "h", "cpp", "hpp", "go", "php");
+            "yml", "yaml", "gradle", "md", "js", "jsx", "mjs", "cjs", "ts", "tsx", "vue", "svelte", "py", "sh", "bat",
+            "cmd", "ps1", "cbl", "cob", "cpy", "jsp", "html", "aspx", "ascx", "cshtml", "config", "cfg", "ini", "txt",
+            "c", "h", "cpp", "hpp", "go", "php");
+
+    /** Cuantos ejemplos de ruta se guardan por motivo de omision (para que el usuario vea cuales). */
+    static final int SAMPLE_PATHS = 10;
+
+    static final String NO_EXTENSION = "(sin extension)";
 
     private static final Charset WINDOWS_1252 = Charset.forName("windows-1252");
 
     public record SourceFile(String relativePath, long size) {}
+
+    /**
+     * Lo que el escaneo dejo fuera, para que la cobertura del indice sea visible. Las carpetas ignoradas de serie
+     * (node_modules, target...) no se cuentan: se omiten enteras a proposito.
+     *
+     * @param byExtension ficheros con una extension que no se indexa, por extension y de mayor a menor conteo
+     * @param tooLarge ficheros con extension indexable pero mayores de MAX_FILE_BYTES
+     * @param tooLargeSamples primeras rutas de los ficheros demasiado grandes
+     */
+    public record Omitted(Map<String, Integer> byExtension, int tooLarge, List<String> tooLargeSamples) {
+        public static Omitted none() {
+            return new Omitted(Map.of(), 0, List.of());
+        }
+    }
+
+    public record Scan(List<SourceFile> files, Omitted omitted) {}
 
     /** Elemento del arbol de ficheros; indexable = se incluiria en el indice. */
     public record Entry(String name, String path, boolean directory, boolean indexable, long size) {}
@@ -104,7 +128,15 @@ public final class RepositoryScanner {
     }
 
     public List<SourceFile> scan() throws IOException {
+        return scanAll().files();
+    }
+
+    /** Ficheros a indexar mas el detalle de lo que quedo fuera y por que. */
+    public Scan scanAll() throws IOException {
         List<SourceFile> out = new ArrayList<>();
+        Map<String, Integer> omittedByExtension = new java.util.HashMap<>();
+        int[] tooLarge = {0};
+        List<String> tooLargeSamples = new ArrayList<>();
         Files.walkFileTree(root, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
@@ -117,8 +149,17 @@ public final class RepositoryScanner {
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                if (attrs.isRegularFile() && !attrs.isSymbolicLink() && attrs.size() > 0
-                        && attrs.size() <= MAX_FILE_BYTES && hasSourceExtension(file)) {
+                if (!attrs.isRegularFile() || attrs.isSymbolicLink() || attrs.size() == 0) {
+                    return FileVisitResult.CONTINUE;
+                }
+                if (!hasSourceExtension(file)) {
+                    omittedByExtension.merge(extensionKey(file), 1, Integer::sum);
+                } else if (attrs.size() > MAX_FILE_BYTES) {
+                    tooLarge[0]++;
+                    if (tooLargeSamples.size() < SAMPLE_PATHS) {
+                        tooLargeSamples.add(relative(file));
+                    }
+                } else {
                     out.add(new SourceFile(relative(file), attrs.size()));
                 }
                 return FileVisitResult.CONTINUE;
@@ -130,7 +171,33 @@ public final class RepositoryScanner {
             }
         });
         out.sort((a, b) -> a.relativePath().compareTo(b.relativePath()));
+        return new Scan(out, new Omitted(sortedByCount(omittedByExtension), tooLarge[0],
+                List.copyOf(tooLargeSamples)));
+    }
+
+    private static Map<String, Integer> sortedByCount(Map<String, Integer> counts) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        counts.entrySet().stream()
+                .sorted(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())
+                        .thenComparing(Map.Entry.comparingByKey()))
+                .forEach(e -> out.put(e.getKey(), e.getValue()));
         return out;
+    }
+
+    /** Clave con la que se reporta un fichero omitido: "png", "min.js", ".env" o "(sin extension)". */
+    static String extensionKey(Path file) {
+        String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        int dot = name.lastIndexOf('.');
+        if (dot == 0) {
+            return name; // .env, .gitignore, .htaccess: el nombre completo es mas util que "sin extension"
+        }
+        if (dot < 0) {
+            return NO_EXTENSION;
+        }
+        if (name.contains(".min.")) {
+            return "min." + name.substring(dot + 1);
+        }
+        return name.substring(dot + 1);
     }
 
     /** Lee un fichero indicado por su ruta relativa; rechaza cualquier ruta que salga del repositorio. */

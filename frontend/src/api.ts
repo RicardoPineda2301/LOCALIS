@@ -18,8 +18,13 @@ export type IndexStatus = {
   filesDone?: number
   filesSkipped?: number
   filesFailed?: number
+  filesBinary?: number
   embeddingsAvailable?: boolean
   message?: string
+  /** Ficheros con extension no indexable, por extension ("png", "min.js", ".env") y de mayor a menor. */
+  omittedByExtension?: Record<string, number>
+  omittedTooLarge?: number
+  omittedTooLargeSamples?: string[]
 }
 
 export type CitationStatus = 'VERIFIED' | 'FILE_NOT_FOUND' | 'AMBIGUOUS_FILE' | 'OUT_OF_RANGE' | 'NOT_IN_CONTEXT'

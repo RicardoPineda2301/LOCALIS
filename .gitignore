@@ -14,4 +14,4 @@ license.json
 .vscode/
 *.iml
 *.log
-TODO.md
+TODO.md.DS_Store

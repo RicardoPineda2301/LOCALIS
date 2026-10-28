@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type Health, type IndexStatus, type WorkspaceInfo } from '../api'
+import { coverageSummary } from '../coverage'
 
 type Props = {
   workspace: WorkspaceInfo | null
@@ -89,9 +90,19 @@ export function RepoPanel({ workspace, health, reindexSignal, onConfigure, onCha
         </>
       )}
       {status?.state === 'DONE' && (
-        <p className="muted">
-          {status.filesDone} indexados · {status.filesSkipped} sin cambios · {status.filesFailed} con error
-        </p>
+        <>
+          <p className="muted">
+            {status.filesDone} indexados · {status.filesSkipped} sin cambios · {status.filesFailed} con error
+          </p>
+          {coverageSummary(status) && (
+            <p
+              className="muted"
+              title={status.omittedTooLargeSamples?.length ? `De más de 1 MB: ${status.omittedTooLargeSamples.join(', ')}` : undefined}
+            >
+              Fuera del índice: {coverageSummary(status)}
+            </p>
+          )}
+        </>
       )}
       {status?.state === 'FAILED' && status.message && <p className="warn">{status.message}</p>}
       {status?.embeddingsAvailable === false && <p className="warn">Sin embeddings: la búsqueda usa solo palabras clave.</p>}

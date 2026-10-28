@@ -87,6 +87,21 @@ class PipelineTest {
     }
 
     @Test
+    void binaryFilesAreReportedAsBinaryNotAsUnchangedAndOmissionsReachTheStatus() throws Exception {
+        Files.write(repo.resolve("db/dump.sql"), new byte[] {0x53, 0x51, 0x4c, 0, 0, 1, 2, 3});
+        Files.write(repo.resolve("logo.png"), new byte[] {1, 2, 3});
+        runIndex();
+
+        Indexer.Status s = indexer.status();
+        assertEquals(1, s.filesBinary());
+        assertEquals(3, s.filesSkipped(), "los tres fuentes sin cambios; el binario no cuenta como 'sin cambios'");
+        assertEquals(0, s.filesFailed());
+        assertEquals(java.util.Map.of("png", 1), s.omittedByExtension());
+        assertEquals(0, s.omittedTooLarge());
+        assertFalse(store.filePaths().contains("db/dump.sql"));
+    }
+
+    @Test
     void retrievalFindsRelevantCodeWithEmbeddingsAndWithoutThem() {
         var hits = retriever.search("calculate invoice total tax", 3);
         assertEquals("src/com/acme/billing/InvoiceCalculator.java", hits.get(0).chunk().path());

@@ -220,9 +220,17 @@ public final class OllamaClient implements LlmClient {
     }
 
     // "nomic-embed-text" y "nomic-embed-text:latest" son el mismo modelo.
+    // Modelos de Hugging Face como "mistralai/Devstral-Small-2-24B-Instruct-2512" se guardan con "/".
     static boolean sameModel(String installed, String wanted) {
-        String a = installed.contains(":") ? installed : installed + ":latest";
-        String b = wanted.contains(":") ? wanted : wanted + ":latest";
+        String a = installed;
+        String b = wanted;
+        // Si no tiene tag, anadir :latest (para modelos de Ollama registry)
+        if (!a.contains(":") && !a.contains("/")) {
+            a = a + ":latest";
+        }
+        if (!b.contains(":") && !b.contains("/")) {
+            b = b + ":latest";
+        }
         return a.equals(b);
     }
 

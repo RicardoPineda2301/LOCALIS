@@ -1,69 +1,96 @@
 # LOCALIS
 
-Asistente de IA **100% local** para comprender, documentar y diagnosticar código legacy. Corre en la máquina del cliente,
-sin internet, sobre [Ollama](https://ollama.com). Backend en Java 21 (frontend pendiente).
+Asistente de IA **100% local** para entender, documentar y programar sobre código legacy. Corre en la máquina del
+usuario, sin internet, sobre [Ollama](https://ollama.com).
+
+> **Estado: experimental.** Probado en Windows. macOS y Linux deberían funcionar (Java + Node), pero no están probados.
 
 ## Qué hace
 
-| Módulo | Endpoint | Descripción |
-|---|---|---|
-| Indexación | `POST /api/index`, `GET /api/index/status` | Indexa el repositorio del cliente de forma incremental (Java por método; SQL, .NET y otros por ventanas de líneas). Búsqueda híbrida BM25 + embeddings. |
-| Explicar | `POST /api/explain` | `{"path": "src/.../Foo.java"}` y/o `{"question": "..."}`. Explica un fichero (por partes si es muy grande) o responde preguntas sobre el código. |
-| Diagnosticar | `POST /api/diagnose` | `{"problem": "la facturación genera mal el total"}`. Devuelve hipótesis con evidencia `[fichero:línea]`. No corrige código. |
-| Documentación | `GET /api/docs/templates`, `POST /api/docs/generate` | Genera el `.docx` de una plantilla con el logo, empresa, proyecto, versión y autor del cliente. |
-| Estado | `GET /api/health` | Estado de Ollama, modelos instalados, índice y licencia. |
+| Función | Descripción |
+|---|---|
+| Indexación | Indexa el repositorio (Java por método; el resto por ventanas de líneas). Búsqueda híbrida BM25 + embeddings. |
+| Explicar / preguntar | Responde sobre el código del repositorio con citas `fichero:línea` verificadas contra el índice. |
+| Diagnosticar error | A partir de un error o stack trace, propone causas probables con evidencia. No corrige código. |
+| Programar | Conversación directa con el modelo, sin limitarse al repositorio indexado. |
+| Documentación | Rellena con IA las plantillas `.docx` elegidas (texto, tablas y diagramas), quita los apartados que no aplican y renumera. Varias plantillas = un `.zip`. |
 
-### Citas verificadas
-El modelo no "adivina" líneas: cada cita `fichero:línea` de la respuesta se comprueba contra el índice (existe el fichero,
-existen las líneas **y el modelo las tuvo delante**). Si alguna falla se le pide una corrección una vez; lo que siga sin
-verificarse se marca en `citations[].status` y en `warnings`.
+## Stack
+
+| Capa | Tecnología |
+|---|---|
+| Backend | Java 25, `com.sun.net.httpserver` (API REST sin framework), Jackson, JavaParser, SQLite (índice), build con Maven |
+| Frontend | React 19, TypeScript, Vite; se compila dentro del jar y lo sirve el propio backend |
+| Modelos | Ollama: chat `qwen2.5-coder` (7b / 14b) y embeddings `nomic-embed-text` |
+| Documentos | Plantillas `.docx` en `templates/`, editadas a nivel XML; diagramas dibujados con Java2D |
+
+## Prerrequisitos
+
+| Herramienta | Versión | Para qué |
+|---|---|---|
+| JDK | **25** | Compilar y ejecutar (`maven.compiler.release=25`) |
+| Maven | 3.9+ | Compilar el backend |
+| Node.js | 22 LTS (mín. 20.19) | Compilar el frontend (Vite 8 y TypeScript 7 no funcionan con Node 16) |
+| Ollama | reciente | Motor de IA local; debe estar en marcha (`http://localhost:11434`) |
+| Memoria | 8 GB+ | 8-16 GB: `qwen2.5-coder:7b`; 16-24 GB: `qwen2.5-coder:14b` |
+
+El modelo por defecto del código (`mistralai/Devstral-Small-2-24B-Instruct-2512`) exige mucha memoria: en equipos
+normales hay que cambiarlo en `localis.properties` (ver abajo).
+
+## Puesta en marcha
+
+```
+ollama pull qwen2.5-coder:7b
+ollama pull nomic-embed-text
+
+cd frontend && npm install && npm run build && cd ..       # genera src/main/resources/web
+mvn -B -q clean package -DskipTests                         # genera target/localis.jar
+
+cp localis.properties.example localis.properties            # Windows: copy ...
+# en localis.properties: ollama.chatModel=qwen2.5-coder:7b
+java --enable-native-access=ALL-UNNAMED -jar target/localis.jar localis.properties
+```
+
+Abra <http://127.0.0.1:8080>, pulse **Configurar**, elija el repositorio y **Indexar**.
+Tras cambiar código del frontend hay que repetir `npm run build` y `mvn package`.
+
+Tests: `mvn test` (backend) y `cd frontend && npm test`.
+
+## Configuración
+
+Todo en `localis.properties` (plantilla: [localis.properties.example](localis.properties.example)). Cada clave también
+se puede definir con una variable de entorno `LOCALIS_<CLAVE_EN_MAYUSCULAS>`. Las más útiles:
+
+| Clave | Para qué |
+|---|---|
+| `ollama.chatModel` / `ollama.embedModel` | Modelos de chat y de embeddings |
+| `ollama.numCtx`, `ollama.maxTokens` | Contexto del modelo y longitud máxima de cada respuesta |
+| `repo.path` | Repositorio a analizar (también se elige desde la interfaz) |
+| `branding.company`, `branding.logo` | Empresa y logo que se ponen en los documentos |
+| `license.enforce` | `false` en desarrollo; la licencia solo se exige en las builds para clientes |
 
 ## Modo sin internet
-- El servidor escucha solo en `127.0.0.1` por defecto.
-- Toda conexión saliente pasa por `NetworkGuard`: solo se permiten los hosts de `network.allowedHosts`
-  (por defecto `localhost`, `127.0.0.1`, `::1`). No se siguen redirecciones.
-- No hay telemetría ni llamadas externas. Para permitir otro host (p. ej. un servidor Ollama en la LAN) el cliente
-  debe añadirlo explícitamente.
 
-## Requisitos
-- Java 21 (para compilar: Maven 3.9+).
-- Ollama con un modelo de chat y uno de embeddings, por ejemplo:
-  ```
-  ollama pull codellama:13b-instruct
-  ollama pull nomic-embed-text
-  ```
-  Los modelos se cambian en `localis.properties` (`ollama.chatModel`, `ollama.embedModel`). **Revise la licencia de cada
-  modelo antes de distribuirlo comercialmente.**
+El servidor escucha solo en `127.0.0.1` y toda conexión saliente pasa por `NetworkGuard`: únicamente se permiten los
+hosts de `network.allowedHosts` (por defecto, solo la propia máquina). No hay telemetría.
 
-## Uso
+## Estructura
+
 ```
-mvn package                       # compila, ejecuta tests y genera target/localis.jar
-copy localis.properties.example localis.properties   # y ajuste repo.path, branding.*, etc.
-java -jar target/localis.jar
-curl -X POST http://127.0.0.1:8080/api/index
-curl -X POST -H "Content-Type: application/json" -d "{\"problem\":\"el total de la factura sale mal\"}" http://127.0.0.1:8080/api/diagnose
+src/main/java/com/localis/   api, rag (explicar/diagnosticar), index, search, llm, docs, license, config
+frontend/                    React + Vite
+templates/                   plantillas .docx
+scripts/                     instalador y empaquetado para clientes (Windows)
 ```
 
-## Plantillas
-[templates/](templates) contiene las plantillas `.docx` neutras (sin logo ni marca). Campos que se rellenan:
-`{{COMPANY_NAME}}` (pie), `[Project Name]`, `[Month Year]`, `[Author Name]`, `[Team / Area]` y el `[X.X]` de la portada.
-El logo del cliente (`branding.logo`: PNG, JPG, GIF o BMP) se ajusta sin deformarlo al lienzo del logo de la plantilla.
-El resto de marcadores `[...]` quedan para que la IA los complete (siguiente fase).
+## Licencias (solo builds para clientes)
 
-## Licencias (herramienta del proveedor)
-Licencias offline firmadas con Ed25519, con caducidad (o vitalicias), máquinas y módulos (`explain`, `diagnose`, `docs`).
-```
-java -cp target/localis.jar com.localis.license.LicenseTool keygen ./keys          # una sola vez; guarde private.pem fuera del repo
-java -cp target/localis.jar com.localis.license.LicenseTool fingerprint            # el cliente envía este id
-java -cp target/localis.jar com.localis.license.LicenseTool issue --key keys/private.pem --customer "ACME" ^
-     --expires 2027-10-13 --machine-id <id> --modules explain,diagnose,docs --out license.json
-```
-Copie `public.pem` a `src/main/resources/license-public.pem` antes de compilar la build de cliente y active
-`license.enforce=true`. **Nunca distribuya ni suba `private.pem`.**
+Licencias offline firmadas con Ed25519 (caducidad, máquinas y módulos `explain`, `diagnose`, `docs`). Se emiten con
+`com.localis.license.LicenseTool` (`keygen`, `fingerprint`, `issue`); la clave pública va en
+`src/main/resources/license-public.pem`. **Nunca suba `private.pem` ni `license.json`.**
 
-## Pendiente / siguientes pasos
-- Frontend web y/o plugin de IDE.
-- Grafo de llamadas (Java/C#) para seguir el flujo de un cálculo y mejorar el diagnóstico.
-- Parsers para C# y SQL/PL-SQL (hoy se dividen por ventanas de líneas).
-- Rellenado de los marcadores `[...]` de las plantillas con IA, por niveles (función → módulo → sistema).
-- Protección anti-retroceso de reloj en la licencia y ofuscación del JAR.
+## Pendiente
+
+- Que el bot respete las convenciones del repositorio del usuario (perfil del proyecto + documentación indexada).
+- Rehacer "Diagnosticar" como auditoría del sistema (mejoras, optimizaciones, vulnerabilidades).
+- Más contexto para los documentos generados (manifiestos, esquema de BD, módulos).

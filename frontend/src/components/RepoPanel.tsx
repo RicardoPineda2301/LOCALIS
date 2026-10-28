@@ -8,6 +8,11 @@ type Props = {
   onConfigure: () => void
   onChanged: () => void
   onError: (e: unknown) => void
+  onGenerateDoc?: () => void
+  generatingDoc?: boolean
+  docProgress?: { percent: number; text: string } | null
+  docError?: string
+  docAvailable?: boolean
 }
 
 const STATE_LABEL: Record<IndexStatus['state'], string> = {
@@ -18,7 +23,7 @@ const STATE_LABEL: Record<IndexStatus['state'], string> = {
   NOT_CONFIGURED: 'Sin repositorio',
 }
 
-export function RepoPanel({ workspace, health, reindexSignal, onConfigure, onChanged, onError }: Props) {
+export function RepoPanel({ workspace, health, reindexSignal, onConfigure, onChanged, onError, onGenerateDoc, generatingDoc = false, docProgress = null, docError = '', docAvailable = false }: Props) {
   const [status, setStatus] = useState<IndexStatus | null>(null)
   const [error, setError] = useState('')
   const wasRunning = useRef(false)
@@ -100,7 +105,26 @@ export function RepoPanel({ workspace, health, reindexSignal, onConfigure, onCha
             {hasIndex ? 'Reindexar' : 'Indexar'}
           </button>
         )}
+        {repo && hasIndex && (
+          <button
+            className="doc-btn"
+            onClick={onGenerateDoc}
+            disabled={running || generatingDoc || !docAvailable || !health?.llm.reachable}
+          >
+            {generatingDoc ? 'Generando…' : 'Generar documentación'}
+          </button>
+        )}
       </div>
+      {docError && <p className="warn">{docError}</p>}
+      {docProgress && (
+        <div className="doc-progress" role="status" aria-live="polite">
+          <div className="doc-progress-bar" role="progressbar" aria-valuenow={docProgress.percent} aria-valuemin={0} aria-valuemax={100}>
+            <div className="doc-progress-fill" style={{ width: `${Math.max(3, docProgress.percent)}%` }} />
+          </div>
+          <p className="muted">{docProgress.text} · {docProgress.percent}%</p>
+          <p className="muted">Puede tardar varios minutos. No cierre esta ventana.</p>
+        </div>
+      )}
     </section>
   )
 }

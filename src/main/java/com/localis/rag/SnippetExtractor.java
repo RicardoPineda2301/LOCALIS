@@ -69,6 +69,15 @@ public final class SnippetExtractor {
     }
 
     public static List<Snippet> extract(List<Citation> citations, IndexStore store, RepositoryScanner scanner) {
+        return extract(citations, List.of(), store, scanner);
+    }
+
+    /**
+     * 'sources': los tramos que el modelo tuvo delante. Entre las ventanas solapadas que contienen una linea citada se
+     * prefiere la que el modelo vio, para que "Codigo implicado" coincida con "Fuentes consultadas".
+     */
+    public static List<Snippet> extract(List<Citation> citations, List<Context.SourceRef> sources, IndexStore store,
+            RepositoryScanner scanner) {
         Map<String, int[]> ranges = new LinkedHashMap<>();
         Map<String, String> symbols = new LinkedHashMap<>();
         Map<String, List<Integer>> highlights = new LinkedHashMap<>();
@@ -77,7 +86,7 @@ public final class SnippetExtractor {
                 continue;
             }
             List<CodeChunk> chunks = store.chunksOfFile(c.path());
-            int[] range = enclosingRange(chunks, c.startLine());
+            int[] range = enclosingRange(chunks, c.startLine(), sources);
             if (range == null) {
                 continue;
             }
@@ -113,13 +122,24 @@ public final class SnippetExtractor {
         return out;
     }
 
-    /** Funcion completa si el chunk es un metodo; si no (o si es enorme), el bloque que contiene la linea. */
     static int[] enclosingRange(List<CodeChunk> chunks, int line) {
-        List<CodeChunk> containing = chunks.stream().filter(c -> c.startLine() <= line && line <= c.endLine())
-                .toList();
-        if (containing.isEmpty()) {
+        return enclosingRange(chunks, line, List.of());
+    }
+
+    /**
+     * Funcion completa si el chunk es un metodo; si no (o si es enorme), el bloque que contiene la linea. Si varios
+     * bloques contienen la linea (ventanas solapadas), se consideran primero los que el modelo vio. Un bloque "visto"
+     * es el que empieza donde empieza un tramo mostrado del mismo fichero: Context.truncate puede acortar el final
+     * de un bloque pero nunca mueve su inicio. Si ninguno coincide (p. ej. modo fichero completo), se usan todos.
+     */
+    static int[] enclosingRange(List<CodeChunk> chunks, int line, List<Context.SourceRef> sources) {
+        List<CodeChunk> all = chunks.stream().filter(c -> c.startLine() <= line && line <= c.endLine()).toList();
+        if (all.isEmpty()) {
             return null;
         }
+        List<CodeChunk> seen = all.stream().filter(c -> sources.stream()
+                .anyMatch(s -> s.path().equals(c.path()) && s.startLine() == c.startLine())).toList();
+        List<CodeChunk> containing = seen.isEmpty() ? all : seen;
         CodeChunk method = containing.stream().filter(c -> "method".equals(c.kind())).findFirst().orElse(null);
         if (method != null) {
             int[] merged = mergeWindows(chunks, method);

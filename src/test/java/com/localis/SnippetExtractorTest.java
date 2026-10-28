@@ -127,6 +127,34 @@ class SnippetExtractorTest {
         return new com.localis.rag.Context.SourceRef(path, from, to, null);
     }
 
+    /** Bug 5c: con ventanas solapadas (1-60, 51-110) y la cita en la 55, debe salir la ventana que el modelo vio. */
+    @Test
+    void withOverlappingWindowsTheSnippetIsTheWindowTheModelActuallySaw() throws Exception {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 1; i <= 150; i++) {
+            sb.append("SELECT ").append(i).append(";\n");
+        }
+        index("db/q.sql", sb.toString());
+        var cite = List.of(cite("db/q.sql", 55, 55, Status.VERIFIED));
+
+        var seen = SnippetExtractor.extract(cite, List.of(shown("db/q.sql", 51, 110)), store, scanner);
+        assertEquals(1, seen.size());
+        assertEquals(51, seen.get(0).startLine(), "la ventana vista, no la de centro mas cercano");
+        assertEquals(110, seen.get(0).endLine());
+        assertEquals(List.of(55), seen.get(0).highlight());
+
+        var legacy = SnippetExtractor.extract(cite, store, scanner);
+        assertEquals(1, legacy.get(0).startLine(), "sin fuentes se conserva el comportamiento anterior");
+        assertEquals(60, legacy.get(0).endLine());
+
+        var wholeFile = SnippetExtractor.extract(cite, List.of(shown("db/q.sql", 1, 150)), store, scanner);
+        assertEquals(1, wholeFile.get(0).startLine(), "modo fichero: ningun bloque coincide y se usan todos");
+        assertEquals(60, wholeFile.get(0).endLine());
+
+        var otherFile = SnippetExtractor.extract(cite, List.of(shown("db/other.sql", 51, 110)), store, scanner);
+        assertEquals(1, otherFile.get(0).startLine(), "una fuente de otro fichero no cuenta");
+    }
+
     @Test
     void infersLinesMentionedWithoutTheCitationFormat() {
         var shown = List.of(shown("src/A.java", 1, 40));

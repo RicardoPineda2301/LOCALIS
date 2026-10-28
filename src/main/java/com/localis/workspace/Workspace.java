@@ -107,7 +107,7 @@ public final class Workspace implements AutoCloseable {
         }
         List<CitationVerifier.Citation> cites = r.citations().stream().anyMatch(CitationVerifier.Citation::verified)
                 ? r.citations() : SnippetExtractor.inferFromText(r.answer(), r.sources());
-        return SnippetExtractor.extract(cites, s.store(), s.scanner());
+        return SnippetExtractor.extract(cites, r.sources(), s.store(), s.scanner());
     }
 
     private State require() {

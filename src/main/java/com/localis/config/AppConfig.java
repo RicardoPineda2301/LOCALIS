@@ -47,7 +47,26 @@ public record AppConfig(
         return from(p);
     }
 
+    /** Caracteres de codigo por token, estimacion conservadora para codigo con numeros de linea. */
+    private static final int CHARS_PER_TOKEN = 3;
+    /** Tokens reservados para el prompt de sistema, la pregunta y las reglas de idioma. */
+    private static final int PROMPT_RESERVE_TOKENS = 500;
+    private static final int RESPONSE_MARGIN_TOKENS = 500;
+
+    /**
+     * Presupuesto de contexto (en caracteres) que cabe en la ventana del modelo una vez descontados la respuesta y el
+     * prompt. Se usa cuando retrieval.maxContextChars no esta definido, para que subir ollama.numCtx aproveche
+     * automaticamente la ventana extra.
+     */
+    public static int defaultMaxContextChars(int numCtx, int maxTokens) {
+        int available = numCtx - maxTokens - RESPONSE_MARGIN_TOKENS - PROMPT_RESERVE_TOKENS;
+        return Math.max(4000, available * CHARS_PER_TOKEN);
+    }
+
     public static AppConfig from(Properties p) {
+        int numCtx = Integer.parseInt(str(p, "ollama.numCtx", "8192"));
+        int maxTokens = Integer.parseInt(str(p, "ollama.maxTokens", "1500"));
+        String maxContextChars = str(p, "retrieval.maxContextChars", "");
         return new AppConfig(
                 str(p, "server.host", "127.0.0.1"),
                 Integer.parseInt(str(p, "server.port", "8080")),
@@ -55,10 +74,10 @@ public record AppConfig(
                 str(p, "ollama.baseUrl", "http://localhost:11434"),
                 str(p, "ollama.chatModel", "mistralai/Devstral-Small-2-24B-Instruct-2512"),
                 str(p, "ollama.embedModel", "nomic-embed-text"),
-                Integer.parseInt(str(p, "ollama.numCtx", "8192")),
+                numCtx,
                 Integer.parseInt(str(p, "ollama.timeoutSeconds", "600")),
                 str(p, "ollama.keepAlive", "30m"),
-                Integer.parseInt(str(p, "ollama.maxTokens", "1500")),
+                maxTokens,
                 list(str(p, "network.allowedHosts", "localhost,127.0.0.1,::1")),
                 path(str(p, "repo.path", "")),
                 Path.of(str(p, "data.dir", "./data")),
@@ -69,7 +88,8 @@ public record AppConfig(
                 Path.of(str(p, "license.file", "./license.json")),
                 path(str(p, "license.publicKey", "")),
                 Integer.parseInt(str(p, "retrieval.topK", "8")),
-                Integer.parseInt(str(p, "retrieval.maxContextChars", "16000")),
+                maxContextChars.isBlank() || maxContextChars.equals("0")
+                        ? defaultMaxContextChars(numCtx, maxTokens) : Integer.parseInt(maxContextChars),
                 list(str(p, "index.ignoreDirs", "")));
     }
 

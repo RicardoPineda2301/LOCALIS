@@ -36,7 +36,9 @@ branding.logo=
 
 # --- Retrieval ---
 retrieval.topK=8
-retrieval.maxContextChars=16000
+# Caracteres de codigo que se le muestran al modelo por pregunta. Vacio = se calcula a partir de ollama.numCtx y
+# ollama.maxTokens (con los valores por defecto, unos 17.000). Solo fijelo si quiere forzar un valor concreto.
+retrieval.maxContextChars=
 
 # --- Indexacion ---
 # Ya se ignoran de serie .git, node_modules, target, build, dist, vendor, .venv, site-packages y similares.

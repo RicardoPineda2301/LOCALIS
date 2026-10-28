@@ -44,6 +44,12 @@ public final class Chunker {
                 return sql;
             }
         }
+        if (JS_EXTENSIONS.stream().anyMatch(lower::endsWith)) {
+            List<CodeChunk> js = chunkByTopLevelDeclarations(path, lines, JS_DECLARATION, "function");
+            if (!js.isEmpty()) {
+                return js;
+            }
+        }
         List<CodeChunk> out = new ArrayList<>();
         windows(out, path, lines, 1, lines.size(), "block", null);
         return out;
@@ -102,6 +108,142 @@ public final class Chunker {
             windows(out, path, lines, cursor, lines.size(), "block", null);
         }
         return out;
+    }
+
+    static final List<String> JS_EXTENSIONS = List.of(".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs");
+
+    /**
+     * Declaracion de nivel superior en JS/TS (sin indentacion): function f, export default function, class C,
+     * const C = (...) => / function / React.memo(...) / forwardRef(...), y en TS interface/type/enum. El grupo
+     * "name" es el nombre; "export default function (" anonimo se llama "default".
+     */
+    static final Pattern JS_DECLARATION = Pattern.compile(
+            "^(?:export\\s+(?:default\\s+)?)?(?:declare\\s+)?(?:"
+            + "(?:async\\s+)?function\\s*\\*?\\s*(?<name>\\w+)?\\s*[(<]"
+            + "|(?:abstract\\s+)?class\\s+(?<cls>\\w+)"
+            + "|(?:const|let|var)\\s+(?<var>\\w+)\\s*(?::[^=]*)?=\\s*(?=.*(?:=>|\\bfunction\\b|\\w+\\s*\\(|\\{\\s*$))"
+            + "|(?:interface|type|enum)\\s+(?<ts>\\w+)\\b"
+            + ")");
+
+    /**
+     * Un fragmento por declaracion de nivel superior (funcion, componente, clase, hook), con el nombre como simbolo
+     * y los comentarios pegados encima. La declaracion termina cuando las llaves/parentesis abiertos desde su primera
+     * linea vuelven a cero (sin contar los de cadenas y comentarios) o, si eso no pasa, justo antes de la siguiente
+     * declaracion. Imports y codigo suelto van en ventanas. No es un parser: una funcion definida dentro de otra no se
+     * separa. Vacio si no hay ninguna declaracion.
+     */
+    private List<CodeChunk> chunkByTopLevelDeclarations(String path, List<String> lines, Pattern declaration,
+            String kind) {
+        List<Range> decls = new ArrayList<>();
+        int i = 0;
+        while (i < lines.size()) {
+            Matcher m = declaration.matcher(lines.get(i));
+            if (!m.find()) {
+                i++;
+                continue;
+            }
+            int start = commentBlockStart(lines, i + 1, true);
+            if (!decls.isEmpty() && start <= decls.get(decls.size() - 1).end()) {
+                start = i + 1;
+            }
+            String name = firstGroup(m, "name", "cls", "var", "ts");
+            int end = declarationEnd(lines, i, declaration);
+            decls.add(new Range(start, end, name == null ? "default" : name));
+            i = end; // 0-based: la linea siguiente al final
+        }
+        if (decls.isEmpty()) {
+            return List.of();
+        }
+        List<CodeChunk> out = new ArrayList<>();
+        int cursor = 1;
+        for (Range r : decls) {
+            int start = Math.max(r.start(), cursor);
+            if (start > r.end()) {
+                continue;
+            }
+            if (start > cursor) {
+                windows(out, path, lines, cursor, lastNonBlank(lines, cursor, start), "block", null);
+            }
+            windows(out, path, lines, start, r.end(), kind, r.symbol());
+            cursor = r.end() + 1;
+        }
+        if (cursor <= lines.size()) {
+            windows(out, path, lines, cursor, lines.size(), "block", null);
+        }
+        return out;
+    }
+
+    private static String firstGroup(Matcher m, String... names) {
+        for (String n : names) {
+            if (m.group(n) != null) {
+                return m.group(n);
+            }
+        }
+        return null;
+    }
+
+    /** Ultima linea (1-based) de la declaracion que empieza en el indice 0-based 'from'. */
+    private static int declarationEnd(List<String> lines, int from, Pattern declaration) {
+        int depth = 0;
+        boolean inBlockComment = false;
+        char quote = 0;
+        for (int i = from; i < lines.size(); i++) {
+            if (i > from && depth <= 0 && quote == 0 && declaration.matcher(lines.get(i)).find()) {
+                return lastNonBlank(lines, from + 1, commentBlockStart(lines, i + 1, true));
+            }
+            String line = lines.get(i);
+            StringBuilder code = new StringBuilder();
+            if (quote != '`') {
+                quote = 0; // las comillas simples y dobles no cruzan lineas; los template literals si
+            }
+            for (int k = 0; k < line.length(); k++) {
+                char ch = line.charAt(k);
+                if (inBlockComment) {
+                    if (ch == '*' && k + 1 < line.length() && line.charAt(k + 1) == '/') {
+                        inBlockComment = false;
+                        k++;
+                    }
+                    continue;
+                }
+                if (quote != 0) {
+                    if (ch == '\\') {
+                        k++;
+                    } else if (ch == quote) {
+                        quote = 0;
+                    }
+                    continue;
+                }
+                if (ch == '/' && k + 1 < line.length() && line.charAt(k + 1) == '/') {
+                    break;
+                }
+                if (ch == '/' && k + 1 < line.length() && line.charAt(k + 1) == '*') {
+                    inBlockComment = true;
+                    k++;
+                    continue;
+                }
+                if (ch == '"' || ch == '\'' || ch == '`') {
+                    quote = ch;
+                    continue;
+                }
+                code.append(ch);
+            }
+            for (int k = 0; k < code.length(); k++) {
+                char ch = code.charAt(k);
+                if (ch == '{' || ch == '(' || ch == '[') {
+                    depth++;
+                } else if (ch == '}' || ch == ')' || ch == ']') {
+                    depth--;
+                }
+            }
+            String trimmed = code.toString().trim();
+            boolean opened = depth > 0 || quote == '`';
+            if (!opened && !trimmed.isEmpty() && !trimmed.endsWith("=") && !trimmed.endsWith("=>")
+                    && !trimmed.endsWith(",") && !trimmed.endsWith("&&") && !trimmed.endsWith("||")
+                    && !trimmed.endsWith("?") && !trimmed.endsWith(":") && !trimmed.endsWith(".")) {
+                return i + 1;
+            }
+        }
+        return lines.size();
     }
 
     private static final String SQL_NAME_PART = "(?:\"[^\"]*\"|\\[[^\\]]*\\]|`[^`]*`|[\\w#]+)";
@@ -222,8 +364,20 @@ public final class Chunker {
 
     /** Linea (1-based) donde empieza el bloque de comentarios "--" pegado justo encima de la linea dada. */
     private static int commentBlockStart(List<String> lines, int line) {
+        return commentBlockStart(lines, line, false);
+    }
+
+    /** Con 'cStyle', los comentarios son los de JS/TS/C (lineas que empiezan por "//", "/*" o "*"); si no, "--" (SQL). */
+    private static int commentBlockStart(List<String> lines, int line, boolean cStyle) {
         int start = line;
-        while (start > 1 && lines.get(start - 2).trim().startsWith("--")) {
+        while (start > 1) {
+            String prev = lines.get(start - 2).trim();
+            boolean comment = cStyle
+                    ? prev.startsWith("//") || prev.startsWith("/*") || prev.startsWith("*")
+                    : prev.startsWith("--");
+            if (!comment) {
+                break;
+            }
             start--;
         }
         return start;

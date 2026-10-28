@@ -149,6 +149,74 @@ class ChunkerTest {
         assertEquals("block", chunks.get(0).kind());
     }
 
+    private static final String TSX = String.join("\n",
+            "import React, { useState } from 'react';",
+            "import { supabase } from '../lib/supabase';",
+            "",
+            "type Props = { id: number; onClose: () => void };",
+            "",
+            "// Carga el contrato y lo deja en estado",
+            "export function useContrato(id: number) {",
+            "  const [data, setData] = useState<any>(null);",
+            "  React.useEffect(() => {",
+            "    supabase.from('contratos').select('*').eq('id', id).then(({ data }) => setData(data));",
+            "  }, [id]);",
+            "  return data;",
+            "}",
+            "",
+            "/**",
+            " * Pantalla de detalle del contrato.",
+            " */",
+            "export default function ContratoDetalle({ id, onClose }: Props) {",
+            "  const data = useContrato(id);",
+            "  if (!data) return <p>Cargando...</p>;",
+            "  return (",
+            "    <div className=\"card\">",
+            "      <h1>{data.nombre} isn't ready</h1>",
+            "      <button onClick={onClose}>Cerrar</button>",
+            "    </div>",
+            "  );",
+            "}",
+            "",
+            "const formatMoney = (n: number) => `Q${n.toFixed(2)}`;",
+            "",
+            "export const Badge = React.memo(({ text }: { text: string }) => (",
+            "  <span className=\"badge\">{text}</span>",
+            "));");
+
+    @Test
+    void jsAndTsAreSplitPerTopLevelDeclarationWithTheNameAsSymbol() {
+        List<CodeChunk> chunks = chunker.chunk("src/pages/ContratoDetalle.tsx", TSX);
+        List<String> symbols = chunks.stream().map(CodeChunk::symbol).toList();
+        assertEquals(java.util.Arrays.asList(null, "Props", "useContrato", "ContratoDetalle", "formatMoney", "Badge"),
+                symbols);
+
+        assertEquals("block", chunks.get(0).kind());
+        assertEquals(1, chunks.get(0).startLine(), "los imports quedan en una ventana");
+        assertEquals(2, chunks.get(0).endLine());
+
+        CodeChunk hook = chunks.get(2);
+        assertEquals("function", hook.kind());
+        assertEquals(6, hook.startLine(), "incluye el comentario // pegado encima");
+        assertEquals(13, hook.endLine(), "termina en la llave que cierra la funcion");
+
+        CodeChunk page = chunks.get(3);
+        assertEquals(15, page.startLine(), "incluye el bloque /** */");
+        assertEquals(27, page.endLine(), "el apostrofo del JSX y las llaves de dentro no lo rompen");
+
+        assertEquals(29, chunks.get(4).startLine(), "arrow de una linea con template literal");
+        assertEquals(29, chunks.get(4).endLine());
+        assertEquals(31, chunks.get(5).startLine(), "React.memo(...) de varias lineas");
+        assertEquals(33, chunks.get(5).endLine());
+    }
+
+    @Test
+    void jsWithoutDeclarationsStillUsesWindows() {
+        List<CodeChunk> chunks = chunker.chunk("config.js", "module.exports = { a: 1 };\nconsole.log('x');\n");
+        assertEquals(1, chunks.size());
+        assertEquals("block", chunks.get(0).kind());
+    }
+
     @Test
     void emptyContentYieldsNoChunks() {
         assertTrue(chunker.chunk("a.sql", "").isEmpty());

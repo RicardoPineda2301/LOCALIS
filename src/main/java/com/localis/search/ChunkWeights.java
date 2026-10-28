@@ -49,7 +49,7 @@ public final class ChunkWeights {
         return w;
     }
 
-    static boolean isStalePath(String path) {
+    public static boolean isStalePath(String path) {
         String[] parts = path.toLowerCase(Locale.ROOT).split("/");
         for (int i = 0; i < parts.length - 1; i++) {
             if (STALE_DIRS.contains(parts[i])) {

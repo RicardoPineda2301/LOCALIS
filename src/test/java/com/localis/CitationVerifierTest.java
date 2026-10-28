@@ -65,4 +65,33 @@ class CitationVerifierTest {
     void plainTextWithoutCitationsYieldsNothing() {
         assertTrue(verifier.verify("Todo parece bien a las 10:30.", shown).isEmpty());
     }
+
+    @Test
+    void numberedCitationsAreResolvedToTheNumberedFileAndInvalidNumbersAreLeft() {
+        List<String> files = List.of("src/com/acme/billing/InvoiceCalculator.java", "db/tax.sql");
+        assertEquals("Ver [src/com/acme/billing/InvoiceCalculator.java:15] y [db/tax.sql:2-3], no [3:9] ni [0:1].",
+                CitationVerifier.resolveNumbered("Ver [1:15] y [2: 2-3], no [3:9] ni [0:1].", files));
+        assertEquals("[1:L15]", CitationVerifier.resolveNumbered("[1:L15]", List.of()), "sin ficheros no se toca");
+        assertEquals("[src/com/acme/billing/InvoiceCalculator.java:15]",
+                CitationVerifier.resolveNumbered("[1:L15]", files));
+    }
+
+    @Test
+    void aNumberedCitationThatSurvivesResolutionIsReportedAsInvalid() {
+        List<CitationVerifier.Citation> out = verifier.verify(
+                "Ver [src/com/acme/billing/InvoiceCalculator.java:15] y [7:12]", shown);
+        assertEquals(2, out.size());
+        assertEquals(Status.VERIFIED, out.get(0).status());
+        assertEquals(Status.FILE_NOT_FOUND, out.get(1).status());
+        assertEquals("[7:12]", out.get(1).raw());
+    }
+
+    @Test
+    void thePlaceholderPrefixFromOldPromptsIsStrippedAndMatchedByFileName() {
+        assertEquals(Status.VERIFIED, statusOf("ver [path/InvoiceCalculator.java:15]"));
+        assertEquals(Status.VERIFIED, statusOf("ver [ruta/InvoiceCalculator.java:15]"));
+        assertEquals(Status.FILE_NOT_FOUND, statusOf("ver [path/Ghost.java:15]"));
+        assertEquals("src/com/acme/billing/InvoiceCalculator.java",
+                verifier.verify("ver [path/InvoiceCalculator.java:15]", shown).get(0).path());
+    }
 }

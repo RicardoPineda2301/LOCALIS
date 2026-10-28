@@ -16,9 +16,10 @@ public final class ExplainService {
 
     static final String SYSTEM = """
             You are a senior software engineer explaining an existing code base to a colleague who has never seen it.
-            Use ONLY the code provided. Every code line is prefixed with its line number ("123| code").
-            Support your statements by citing evidence as [path/File.ext:LINE] or [path/File.ext:START-END],
-            using ONLY files and lines that are shown. Never invent files, methods, lines or behavior.
+            Use ONLY the code provided. Each file is introduced by a numbered header ("=== [2] FILE: ... ===") and
+            every code line is prefixed with its line number ("123| code").
+            Support your statements by citing evidence as [N:LINE] or [N:START-END], where N is the file number
+            from its header, using ONLY files and lines that are shown. Never invent files, methods, lines or behavior.
             If the code provided is not enough to answer, say exactly what is missing.
             Be concrete and structured: purpose, main flow, inputs/outputs, dependencies, notable risks. Skip any
             section that has nothing relevant to say.

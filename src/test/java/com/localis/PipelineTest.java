@@ -171,6 +171,42 @@ class PipelineTest {
     }
 
     @Test
+    void promptsAskForNumberedCitationsAndNumbersAreResolvedToRealPathsBeforeVerifying() {
+        llm.chatHandler = msgs -> msgs.get(0).content().contains("comma-separated")
+                ? "invoice" : "El redondeo esta en [1:" + roundLine + "].";
+        var diagnose = new DiagnoseService(llm, engine, retriever, 8, 16000);
+
+        AnswerResult r = diagnose.diagnose("factura con total incorrecto");
+
+        String system = llm.chatCalls.get(llm.chatCalls.size() - 1).get(0).content();
+        String prompt = llm.chatCalls.get(llm.chatCalls.size() - 1).get(1).content();
+        assertFalse(system.contains("path/File"), "el prompt ya no ensena el ejemplo 'path/'");
+        assertTrue(system.contains("[N:LINE]"));
+        assertTrue(prompt.contains("=== [1] FILE: src/com/acme/billing/InvoiceCalculator.java"));
+        assertTrue(r.allCitationsVerified(), r.citations().toString());
+        assertEquals("src/com/acme/billing/InvoiceCalculator.java", r.citations().get(0).path());
+        assertTrue(r.answer().contains("[src/com/acme/billing/InvoiceCalculator.java:" + roundLine + "]"),
+                "el usuario ve la ruta real: " + r.answer());
+        assertFalse(r.answer().contains("[1:"), r.answer());
+    }
+
+    @Test
+    void aCitationWithAnUnknownSourceNumberTriggersTheCorrectionRound() {
+        int[] n = {0};
+        llm.chatHandler = msgs -> {
+            if (msgs.get(0).content().contains("comma-separated")) {
+                return "invoice";
+            }
+            return n[0]++ == 0 ? "Mira [9:" + roundLine + "]" : "Mira [1:" + roundLine + "]";
+        };
+        AnswerResult r = new DiagnoseService(llm, engine, retriever, 8, 16000).diagnose("factura total");
+
+        assertTrue(r.allCitationsVerified(), r.citations().toString());
+        String correction = llm.chatCalls.get(llm.chatCalls.size() - 1).get(3).content();
+        assertTrue(correction.contains("[9:" + roundLine + "]") && correction.contains("[N:LINE]"), correction);
+    }
+
+    @Test
     void hallucinatedCitationTriggersOneRetryAndIsReported() {
         llm.chatHandler = msgs -> msgs.get(0).content().contains("comma-separated")
                 ? "invoice"

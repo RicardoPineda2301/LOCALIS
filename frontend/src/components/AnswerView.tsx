@@ -2,9 +2,11 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Answer } from '../api'
 import { CITATION_LABEL, citationText } from '../citations'
+import { sourceNumbers } from '../sources'
 import { CodeSnippet } from './CodeSnippet'
 
 export function AnswerView({ answer }: { answer: Answer }) {
+  const numbers = sourceNumbers(answer.sources)
   return (
     <div className="answer">
       <div className="markdown">
@@ -33,7 +35,8 @@ export function AnswerView({ answer }: { answer: Answer }) {
           <ul>
             {answer.sources.map((s, i) => (
               <li key={i}>
-                <code>{citationText(s)}</code> {s.symbol && <span className="muted">· {s.symbol}</span>}
+                <span className="muted">[{numbers[i]}]</span> <code>{citationText(s)}</code>{' '}
+                {s.symbol && <span className="muted">· {s.symbol}</span>}
               </li>
             ))}
           </ul>

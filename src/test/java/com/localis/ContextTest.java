@@ -86,4 +86,22 @@ class ContextTest {
         assertEquals(List.of(1, 3), List.of(ctx.shownRanges().get("z/Last.java").get(0)[0],
                 ctx.shownRanges().get("z/Last.java").get(0)[1]));
     }
+
+    @Test
+    void filesAreNumberedInDisplayOrderAndChunksOfTheSameFileShareTheNumber() {
+        CodeChunk b1 = chunk("b/B.java", 1, 3, "x");
+        CodeChunk b2 = chunk("b/B.java", 50, 3, "y");
+        CodeChunk a = chunk("a/A.sql", 1, 3, "z");
+
+        Context ctx = Context.fromChunks(List.of(b1, b2, a), 100_000);
+
+        assertEquals(List.of("a/A.sql", "b/B.java"), ctx.files());
+        assertTrue(ctx.text().contains("=== [1] FILE: a/A.sql (lines 1-3)"));
+        assertTrue(ctx.text().contains("=== [2] FILE: b/B.java (lines 1-3)"));
+        assertTrue(ctx.text().contains("=== [2] FILE: b/B.java (lines 50-52)"));
+        assertFalse(ctx.text().contains("[3] FILE"));
+        assertTrue(ctx.text().indexOf("[1] FILE") < ctx.text().indexOf("[2] FILE"), "misma numeracion que el orden");
+        assertEquals(List.of("f.java"), Context.fromLines("f.java", List.of("a", "b"), 1, 2).files());
+        assertTrue(Context.fromLines("f.java", List.of("a", "b"), 1, 2).text().startsWith("=== [1] FILE: f.java"));
+    }
 }

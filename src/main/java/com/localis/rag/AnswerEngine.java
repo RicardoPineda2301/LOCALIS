@@ -24,7 +24,7 @@ public final class AnswerEngine {
     /** Regla para el prompt de sistema. */
     public static String languageRule(String language) {
         return "Write your entire answer in " + language + ", the language of the user's question. Keep code, "
-                + "identifiers, file paths and [path:line] citations exactly as they are; do not translate them.";
+                + "identifiers, file paths and citations exactly as they are; do not translate them.";
     }
 
     /** Recordatorio corto para el final del mensaje de usuario (los modelos pequenos atienden mas a lo ultimo). */
@@ -40,7 +40,8 @@ public final class AnswerEngine {
         LlmStats.consumeTruncated();
         List<Message> messages = new ArrayList<>(List.of(Message.system(withLanguage(system, language)),
                 Message.user(user + "\n\n" + languageReminder(language))));
-        String answer = enforceLanguage(llm.chat(messages), messages, language);
+        String raw = enforceLanguage(llm.chat(messages), messages, language);
+        String answer = CitationVerifier.resolveNumbered(raw, ctx.files());
         List<Citation> citations = verifier.verify(answer, ctx.shownRanges());
 
         List<Citation> bad = citations.stream().filter(c -> !c.verified()).toList();
@@ -49,12 +50,13 @@ public final class AnswerEngine {
             Progress.report("Corrigiendo citas no verificadas");
             StringBuilder fb = new StringBuilder("Some of your citations are invalid:\n");
             bad.forEach(c -> fb.append("- ").append(c.raw()).append(" (").append(c.status()).append(")\n"));
-            fb.append("Rewrite your answer citing ONLY file paths and line numbers that appear in the code provided.")
+            fb.append("Rewrite your answer citing ONLY as [N:LINE] or [N:START-END], where N is the number of a file")
+                    .append(" shown (\"=== [N] FILE: ... ===\") and the lines are visible in it.")
                     .append(" If you cannot support a claim with a visible line, say so instead of citing. ")
                     .append(languageReminder(language));
-            messages.add(Message.assistant(answer));
+            messages.add(Message.assistant(raw));
             messages.add(Message.user(fb.toString()));
-            answer = llm.chat(messages);
+            answer = CitationVerifier.resolveNumbered(llm.chat(messages), ctx.files());
             citations = verifier.verify(answer, ctx.shownRanges());
         }
 
@@ -84,7 +86,7 @@ public final class AnswerEngine {
         Progress.report("Ajustando el idioma de la respuesta");
         retry.add(Message.assistant(answer));
         retry.add(Message.user("Your answer is written in " + actual + ". Rewrite it entirely in " + language
-                + ", keeping the same content, structure, code and [path:line] citations unchanged."));
+                + ", keeping the same content, structure, code and citations unchanged."));
         String rewritten = llm.chat(retry);
         String after = Language.detectConfident(rewritten);
         return after != null && !after.equals(language) ? answer : rewritten;

@@ -28,6 +28,13 @@ public final class CitationVerifier {
     private static final Pattern CITATION = Pattern.compile(
             "(?<![\\w/.\\\\-])((?:[\\w.\\-]+[/\\\\])*[\\w.\\-]+\\.[A-Za-z][A-Za-z0-9]{0,7}):L?(\\d+)(?:\\s*[-\u2013]\\s*L?(\\d+))?");
 
+    /** Cita por numero de fuente, [2:45] o [2:40-52], que AnswerEngine ya intento convertir en ruta. */
+    static final Pattern NUMBERED = Pattern.compile(
+            "\\[(\\d{1,3})\\s*:\\s*L?(\\d+)(?:\\s*[-\u2013]\\s*L?(\\d+))?\\]");
+
+    /** Prefijos de ejemplo que los modelos pequenos copian del prompt ("[path/File.ext:LINE]"). */
+    private static final List<String> PLACEHOLDER_PREFIXES = List.of("path/", "ruta/", "file/", "fichero/");
+
     private final Supplier<Set<String>> indexedPaths;
     private final ToIntFunction<String> lineCount;
 
@@ -49,11 +56,48 @@ public final class CitationVerifier {
             int end = m.group(3) == null ? start : Integer.parseInt(m.group(3));
             out.put(raw, check(paths, raw, m.group(1).replace('\\', '/'), start, end, shown));
         }
+        // Lo que sigue numerado a estas alturas apunta a una fuente que no existe: cuenta como cita invalida, para
+        // que el modelo reciba la correccion en vez de pasar en silencio.
+        Matcher n = NUMBERED.matcher(answer);
+        while (n.find()) {
+            String raw = n.group();
+            if (!out.containsKey(raw)) {
+                int start = Integer.parseInt(n.group(2));
+                int end = n.group(3) == null ? start : Integer.parseInt(n.group(3));
+                out.put(raw, new Citation(raw, "fuente [" + n.group(1) + "]", start, end, Status.FILE_NOT_FOUND));
+            }
+        }
         return new ArrayList<>(out.values());
+    }
+
+    /** Sustituye las citas [n:linea] por [ruta:linea] segun la numeracion del contexto; deja las invalidas tal cual. */
+    public static String resolveNumbered(String answer, List<String> files) {
+        if (answer == null || files.isEmpty()) {
+            return answer;
+        }
+        Matcher m = NUMBERED.matcher(answer);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            int n = Integer.parseInt(m.group(1));
+            if (n < 1 || n > files.size()) {
+                m.appendReplacement(sb, Matcher.quoteReplacement(m.group()));
+                continue;
+            }
+            String lines = m.group(3) == null ? m.group(2) : m.group(2) + "-" + m.group(3);
+            m.appendReplacement(sb, Matcher.quoteReplacement("[" + files.get(n - 1) + ":" + lines + "]"));
+        }
+        m.appendTail(sb);
+        return sb.toString();
     }
 
     private Citation check(Set<String> paths, String raw, String cited, int start, int end,
             Map<String, List<int[]>> shown) {
+        for (String prefix : PLACEHOLDER_PREFIXES) {
+            if (cited.toLowerCase(java.util.Locale.ROOT).startsWith(prefix) && !paths.contains(cited)) {
+                cited = cited.substring(prefix.length()); // queda el nombre, que se empareja por sufijo mas abajo
+                break;
+            }
+        }
         List<String> matches = new ArrayList<>();
         if (paths.contains(cited)) {
             matches.add(cited);

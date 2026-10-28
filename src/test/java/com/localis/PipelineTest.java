@@ -96,9 +96,21 @@ class PipelineTest {
         assertEquals(1, s.filesBinary());
         assertEquals(3, s.filesSkipped(), "los tres fuentes sin cambios; el binario no cuenta como 'sin cambios'");
         assertEquals(0, s.filesFailed());
-        assertEquals(java.util.Map.of("png", 1), s.omittedByExtension());
-        assertEquals(0, s.omittedTooLarge());
+        assertEquals(java.util.Map.of("png", 1), s.omitted().byExtension());
+        assertEquals(0, s.omitted().tooLarge());
         assertFalse(store.filePaths().contains("db/dump.sql"));
+    }
+
+    @Test
+    void aFileAddedToGitignoreLeavesTheIndexOnTheNextRun() throws Exception {
+        assertTrue(store.filePaths().contains("db/tax.sql"));
+        Files.writeString(repo.resolve(".gitignore"), "db/\n");
+        runIndex();
+
+        assertFalse(store.filePaths().contains("db/tax.sql"), "lo excluido se borra del indice, no solo se omite");
+        assertEquals(1, indexer.status().omitted().ignoredDirs());
+        assertEquals(List.of("db/"), indexer.status().omitted().ignoredSamples());
+        assertTrue(retriever.search("tax_rate", 5).stream().noneMatch(h -> h.chunk().path().startsWith("db/")));
     }
 
     @Test

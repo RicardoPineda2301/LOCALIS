@@ -107,4 +107,45 @@ class RepositoryScannerTest {
         RepositoryScanner.Omitted omitted = new RepositoryScanner(tmp).scanAll().omitted();
         assertEquals(RepositoryScanner.Omitted.none(), omitted);
     }
+
+    @Test
+    void gitignoreAndLocalisignoreExcludeFilesAndFoldersAndAreCounted() throws Exception {
+        file("src/App.java");
+        file("src/App.test.js");
+        file(".env.local.js");
+        file("generated/G.java");
+        file("generated/H.java");
+        file("Claude outputs/notas.md");
+        file("docs/README.md");
+        Files.writeString(tmp.resolve(".gitignore"), "generated/\n*.test.js\n.env*\ndocs/\n");
+        Files.writeString(tmp.resolve(".localisignore"), "Claude outputs/\n!docs/\n");
+
+        RepositoryScanner scanner = new RepositoryScanner(tmp);
+        RepositoryScanner.Scan scan = scanner.scanAll();
+
+        assertEquals(Set.of("src/App.java", "docs/README.md"),
+                scan.files().stream().map(RepositoryScanner.SourceFile::relativePath).collect(Collectors.toSet()));
+        RepositoryScanner.Omitted o = scan.omitted();
+        assertEquals(2, o.ignoredFiles(), "src/App.test.js y .env.local.js");
+        assertEquals(2, o.ignoredDirs(), "generated/ y Claude outputs/");
+        assertTrue(o.ignoredSamples().containsAll(List.of("src/App.test.js", ".env.local.js", "generated/",
+                "Claude outputs/")), o.ignoredSamples().toString());
+        assertEquals(Map.of(), o.byExtension(), "lo excluido por reglas no se cuenta ademas por extension");
+
+        var rootNames = scanner.list("").stream().map(RepositoryScanner.Entry::name).toList();
+        assertFalse(rootNames.contains("generated") || rootNames.contains("Claude outputs"));
+        assertTrue(rootNames.contains("docs"));
+        var src = scanner.list("src");
+        assertTrue(src.stream().anyMatch(e -> e.name().equals("App.java") && e.indexable()));
+        assertTrue(src.stream().anyMatch(e -> e.name().equals("App.test.js") && !e.indexable()));
+    }
+
+    @Test
+    void withoutIgnoreFilesEverythingIsAsBefore() throws Exception {
+        file("src/App.java");
+        file("src/App.test.js");
+        RepositoryScanner.Scan scan = new RepositoryScanner(tmp).scanAll();
+        assertEquals(2, scan.files().size());
+        assertEquals(0, scan.omitted().ignoredFiles() + scan.omitted().ignoredDirs());
+    }
 }

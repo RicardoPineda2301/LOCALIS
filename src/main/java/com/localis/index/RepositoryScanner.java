@@ -55,10 +55,15 @@ public final class RepositoryScanner {
      * @param byExtension ficheros con una extension que no se indexa, por extension y de mayor a menor conteo
      * @param tooLarge ficheros con extension indexable pero mayores de MAX_FILE_BYTES
      * @param tooLargeSamples primeras rutas de los ficheros demasiado grandes
+     * @param ignoredFiles ficheros excluidos por .gitignore / .localisignore (los que estan dentro de una carpeta
+     *     excluida no se cuentan: en esa carpeta no se entra)
+     * @param ignoredDirs carpetas excluidas por .gitignore / .localisignore
+     * @param ignoredSamples primeras rutas excluidas (ficheros y carpetas, estas con '/' al final)
      */
-    public record Omitted(Map<String, Integer> byExtension, int tooLarge, List<String> tooLargeSamples) {
+    public record Omitted(Map<String, Integer> byExtension, int tooLarge, List<String> tooLargeSamples,
+            int ignoredFiles, int ignoredDirs, List<String> ignoredSamples) {
         public static Omitted none() {
-            return new Omitted(Map.of(), 0, List.of());
+            return new Omitted(Map.of(), 0, List.of(), 0, 0, List.of());
         }
     }
 
@@ -90,7 +95,15 @@ public final class RepositoryScanner {
         return root;
     }
 
-    /** Lista el contenido directo de una carpeta del repositorio (ruta relativa; vacia = raiz), carpetas primero. */
+    /** Reglas de exclusion del repositorio, releidas en cada escaneo por si el cliente las cambia. */
+    private IgnoreRules ignoreRules() {
+        return IgnoreRules.load(root);
+    }
+
+    /**
+     * Lista el contenido directo de una carpeta del repositorio (ruta relativa; vacia = raiz), carpetas primero. Las
+     * carpetas excluidas (de serie o por .gitignore) no aparecen; los ficheros excluidos aparecen como no indexables.
+     */
     public List<Entry> list(String relativeDir) throws IOException {
         Path dir = root.resolve(relativeDir == null ? "" : relativeDir).normalize();
         if (!dir.startsWith(root) || Files.isSymbolicLink(dir)) {
@@ -99,6 +112,7 @@ public final class RepositoryScanner {
         if (!Files.isDirectory(dir)) {
             throw new IllegalArgumentException("No es una carpeta del repositorio: " + relativeDir);
         }
+        IgnoreRules ignore = ignoreRules();
         List<Entry> out = new ArrayList<>();
         try (var stream = Files.newDirectoryStream(dir)) {
             for (Path p : stream) {
@@ -112,13 +126,14 @@ public final class RepositoryScanner {
                 if (a.isSymbolicLink() || a.isOther()) {
                     continue;
                 }
+                String rel = relative(p);
                 if (a.isDirectory()) {
-                    if (!isIgnoredDir(name)) {
-                        out.add(new Entry(name, relative(p), true, false, 0));
+                    if (!isIgnoredDir(name) && !ignore.isIgnored(rel, true)) {
+                        out.add(new Entry(name, rel, true, false, 0));
                     }
                 } else {
-                    out.add(new Entry(name, relative(p), false,
-                            a.size() > 0 && a.size() <= MAX_FILE_BYTES && hasSourceExtension(p), a.size()));
+                    out.add(new Entry(name, rel, false, a.size() > 0 && a.size() <= MAX_FILE_BYTES
+                            && hasSourceExtension(p) && !ignore.isIgnored(rel, false), a.size()));
                 }
             }
         }
@@ -136,12 +151,26 @@ public final class RepositoryScanner {
         List<SourceFile> out = new ArrayList<>();
         Map<String, Integer> omittedByExtension = new java.util.HashMap<>();
         int[] tooLarge = {0};
+        int[] ignoredFiles = {0};
+        int[] ignoredDirs = {0};
         List<String> tooLargeSamples = new ArrayList<>();
+        List<String> ignoredSamples = new ArrayList<>();
+        IgnoreRules ignore = ignoreRules();
         Files.walkFileTree(root, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                if (!dir.equals(root) && (isIgnoredDir(dir.getFileName().toString())
-                        || Files.isSymbolicLink(dir))) {
+                if (dir.equals(root)) {
+                    return FileVisitResult.CONTINUE;
+                }
+                if (isIgnoredDir(dir.getFileName().toString()) || Files.isSymbolicLink(dir)) {
+                    return FileVisitResult.SKIP_SUBTREE;
+                }
+                String rel = relative(dir);
+                if (ignore.isIgnored(rel, true)) {
+                    ignoredDirs[0]++;
+                    if (ignoredSamples.size() < SAMPLE_PATHS) {
+                        ignoredSamples.add(rel + "/");
+                    }
                     return FileVisitResult.SKIP_SUBTREE;
                 }
                 return FileVisitResult.CONTINUE;
@@ -152,7 +181,16 @@ public final class RepositoryScanner {
                 if (!attrs.isRegularFile() || attrs.isSymbolicLink() || attrs.size() == 0) {
                     return FileVisitResult.CONTINUE;
                 }
-                if (!hasSourceExtension(file)) {
+                String rel = relative(file);
+                if (isRuleFile(file)) {
+                    return FileVisitResult.CONTINUE; // .gitignore / .localisignore: configuracion, no contenido
+                }
+                if (ignore.isIgnored(rel, false)) {
+                    ignoredFiles[0]++;
+                    if (ignoredSamples.size() < SAMPLE_PATHS) {
+                        ignoredSamples.add(rel);
+                    }
+                } else if (!hasSourceExtension(file)) {
                     omittedByExtension.merge(extensionKey(file), 1, Integer::sum);
                 } else if (attrs.size() > MAX_FILE_BYTES) {
                     tooLarge[0]++;
@@ -172,7 +210,7 @@ public final class RepositoryScanner {
         });
         out.sort((a, b) -> a.relativePath().compareTo(b.relativePath()));
         return new Scan(out, new Omitted(sortedByCount(omittedByExtension), tooLarge[0],
-                List.copyOf(tooLargeSamples)));
+                List.copyOf(tooLargeSamples), ignoredFiles[0], ignoredDirs[0], List.copyOf(ignoredSamples)));
     }
 
     private static Map<String, Integer> sortedByCount(Map<String, Integer> counts) {
@@ -182,6 +220,11 @@ public final class RepositoryScanner {
                         .thenComparing(Map.Entry.comparingByKey()))
                 .forEach(e -> out.put(e.getKey(), e.getValue()));
         return out;
+    }
+
+    private static boolean isRuleFile(Path file) {
+        String name = file.getFileName().toString();
+        return name.equals(IgnoreRules.GIT_IGNORE) || name.equals(IgnoreRules.LOCALIS_IGNORE);
     }
 
     /** Clave con la que se reporta un fichero omitido: "png", "min.js", ".env" o "(sin extension)". */

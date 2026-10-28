@@ -42,6 +42,9 @@ retrieval.maxContextChars=
 
 # --- Indexacion ---
 # Ya se ignoran de serie .git, node_modules, target, build, dist, vendor, .venv, site-packages y similares.
+# Ademas se respetan el .gitignore del repositorio (incluidos los de subcarpetas y .git/info/exclude) y un fichero
+# .localisignore en la raiz del repositorio, con la misma sintaxis y prioridad sobre .gitignore. Lo excluido no se
+# indexa y, si ya estaba indexado, se borra del indice en el siguiente reindexado.
 # Aqui se pueden anadir nombres de carpeta propios del cliente (separados por comas) para no indexarlas.
 index.ignoreDirs=
 

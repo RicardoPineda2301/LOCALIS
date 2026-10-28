@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,20 +20,19 @@ public final class Indexer {
 
     /**
      * Estado de la indexacion. filesSkipped = sin cambios desde la ultima vez; filesBinary = con extension de texto
-     * pero contenido binario; los campos omitted* describen lo que el escaneo dejo fuera (ver
-     * RepositoryScanner.Omitted), para que la cobertura del indice sea visible.
+     * pero contenido binario; omitted = lo que el escaneo dejo fuera y por que (ver RepositoryScanner.Omitted), para
+     * que la cobertura del indice sea visible.
      */
     public record Status(State state, int filesTotal, int filesDone, int filesSkipped, int filesFailed,
-            int filesBinary, boolean embeddingsAvailable, String message, Map<String, Integer> omittedByExtension,
-            int omittedTooLarge, List<String> omittedTooLargeSamples) {
+            int filesBinary, boolean embeddingsAvailable, String message, RepositoryScanner.Omitted omitted) {
 
         static Status of(State state, String message) {
-            return new Status(state, 0, 0, 0, 0, 0, true, message, Map.of(), 0, List.of());
+            return new Status(state, 0, 0, 0, 0, 0, true, message, RepositoryScanner.Omitted.none());
         }
 
         Status with(State state, String message) {
             return new Status(state, filesTotal, filesDone, filesSkipped, filesFailed, filesBinary,
-                    embeddingsAvailable, message, omittedByExtension, omittedTooLarge, omittedTooLargeSamples);
+                    embeddingsAvailable, message, omitted);
         }
     }
 
@@ -100,8 +98,7 @@ public final class Indexer {
         int failed = 0;
         int binary = 0;
         boolean embeddingsOk = true;
-        status = new Status(State.RUNNING, files.size(), 0, 0, 0, 0, true, "Indexando", omitted.byExtension(),
-                omitted.tooLarge(), omitted.tooLargeSamples());
+        status = new Status(State.RUNNING, files.size(), 0, 0, 0, 0, true, "Indexando", omitted);
 
         Set<String> present = new HashSet<>();
         for (RepositoryScanner.SourceFile sf : files) {
@@ -138,7 +135,7 @@ public final class Indexer {
             }
             done++;
             status = new Status(State.RUNNING, files.size(), done, skipped, failed, binary, embeddingsOk, "Indexando",
-                    omitted.byExtension(), omitted.tooLarge(), omitted.tooLargeSamples());
+                    omitted);
         }
 
         for (String old : new ArrayList<>(store.filePaths())) {
@@ -148,7 +145,7 @@ public final class Indexer {
         }
         status = new Status(State.DONE, files.size(), done, skipped, failed, binary, embeddingsOk,
                 embeddingsOk ? "Indice actualizado" : "Indice actualizado sin embeddings (solo busqueda por palabras)",
-                omitted.byExtension(), omitted.tooLarge(), omitted.tooLargeSamples());
+                omitted);
     }
 
     private List<CodeChunk> embedAll(List<CodeChunk> chunks) {

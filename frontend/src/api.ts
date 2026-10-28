@@ -21,10 +21,19 @@ export type IndexStatus = {
   filesBinary?: number
   embeddingsAvailable?: boolean
   message?: string
-  /** Ficheros con extension no indexable, por extension ("png", "min.js", ".env") y de mayor a menor. */
-  omittedByExtension?: Record<string, number>
-  omittedTooLarge?: number
-  omittedTooLargeSamples?: string[]
+  /** Lo que el escaneo dejó fuera del índice y por qué. */
+  omitted?: Omitted
+}
+
+export type Omitted = {
+  /** Ficheros con extensión no indexable, por extensión ("png", "min.js", ".env") y de mayor a menor. */
+  byExtension: Record<string, number>
+  tooLarge: number
+  tooLargeSamples: string[]
+  /** Excluidos por .gitignore / .localisignore. */
+  ignoredFiles: number
+  ignoredDirs: number
+  ignoredSamples: string[]
 }
 
 export type CitationStatus = 'VERIFIED' | 'FILE_NOT_FOUND' | 'AMBIGUOUS_FILE' | 'OUT_OF_RANGE' | 'NOT_IN_CONTEXT'

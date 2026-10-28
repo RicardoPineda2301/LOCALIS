@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type Health, type IndexStatus, type WorkspaceInfo } from '../api'
-import { coverageSummary } from '../coverage'
+import { coverageDetail, coverageSummary } from '../coverage'
 
 type Props = {
   workspace: WorkspaceInfo | null
@@ -95,10 +95,7 @@ export function RepoPanel({ workspace, health, reindexSignal, onConfigure, onCha
             {status.filesDone} indexados · {status.filesSkipped} sin cambios · {status.filesFailed} con error
           </p>
           {coverageSummary(status) && (
-            <p
-              className="muted"
-              title={status.omittedTooLargeSamples?.length ? `De más de 1 MB: ${status.omittedTooLargeSamples.join(', ')}` : undefined}
-            >
+            <p className="muted" title={coverageDetail(status) || undefined}>
               Fuera del índice: {coverageSummary(status)}
             </p>
           )}

@@ -208,7 +208,8 @@ public final class Chunker {
                 continue;
             }
             if (start > cursor) {
-                windows(out, path, lines, cursor, start - 1, "block", null);
+                // hueco entre objetos (SET, INSERT, comentarios sueltos), sin las lineas en blanco del final
+                windows(out, path, lines, cursor, lastNonBlank(lines, cursor, start), "block", null);
             }
             windows(out, path, lines, start, r.end(), "sql", r.symbol());
             cursor = r.end() + 1;

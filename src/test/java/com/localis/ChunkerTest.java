@@ -57,6 +57,98 @@ class ChunkerTest {
         }
     }
 
+    private static final String PG_SQL = String.join("\n",
+            "-- Esquema de contratos",
+            "SET search_path = public;",
+            "",
+            "CREATE TABLE contratos (",
+            "  id serial PRIMARY KEY,",
+            "  estado text",
+            ");",
+            "",
+            "-- Rescinde un contrato y deja rastro",
+            "-- (version 3)",
+            "CREATE OR REPLACE FUNCTION public.rescindir_contrato(p_id int)",
+            "RETURNS void AS $$",
+            "BEGIN",
+            "  CREATE TEMP TABLE tmp_log (x int);",
+            "  UPDATE contratos SET estado = 'rescindido' WHERE id = p_id;",
+            "END;",
+            "$$ LANGUAGE plpgsql;",
+            "",
+            "CREATE TRIGGER trg_contratos BEFORE UPDATE ON contratos",
+            "  FOR EACH ROW EXECUTE FUNCTION rescindir_contrato();",
+            "CREATE POLICY \"solo dueno\" ON contratos FOR SELECT USING (true);",
+            "ALTER TABLE contratos ADD COLUMN fecha date;",
+            "INSERT INTO contratos (estado) VALUES ('nuevo');",
+            "");
+
+    @Test
+    void sqlIsSplitPerObjectWithTheObjectNameAsSymbol() {
+        List<CodeChunk> chunks = chunker.chunk("supabase/migrations/0097_contratos.sql", PG_SQL);
+        List<String> symbols = chunks.stream().map(CodeChunk::symbol).toList();
+        assertEquals(java.util.Arrays.asList(null, "table contratos", "function public.rescindir_contrato",
+                "trigger trg_contratos", "policy solo dueno", "alter table contratos", null), symbols);
+
+        CodeChunk fn = chunks.get(2);
+        assertEquals("sql", fn.kind());
+        assertEquals(9, fn.startLine(), "incluye los comentarios pegados encima");
+        assertEquals(17, fn.endLine(), "termina en el cierre $$ y no se corta por el CREATE TEMP de dentro");
+        assertTrue(fn.text().contains("CREATE TEMP TABLE tmp_log"));
+
+        assertEquals(1, chunks.get(0).startLine(), "la cabecera (comentario y SET) queda en una ventana");
+        assertEquals(2, chunks.get(0).endLine());
+        assertEquals("block", chunks.get(0).kind());
+        assertEquals(4, chunks.get(1).startLine());
+        assertEquals(7, chunks.get(1).endLine(), "sin la linea en blanco que separa objetos");
+        assertEquals(23, chunks.get(6).startLine(), "el INSERT suelto del final tambien se indexa");
+        assertEquals(23, chunks.get(6).endLine());
+    }
+
+    @Test
+    void tSqlObjectsEndAtGoAndTempTablesDoNotStartAnObject() {
+        String tsql = String.join("\n",
+                "CREATE PROCEDURE [dbo].[sp_cierre]",
+                "AS",
+                "BEGIN",
+                "  CREATE TABLE #tmp (x int);",
+                "  SELECT 1;",
+                "END",
+                "GO",
+                "",
+                "CREATE VIEW dbo.v_saldos AS SELECT 1 AS saldo;",
+                "GO",
+                "");
+        List<CodeChunk> chunks = chunker.chunk("db/cierre.sql", tsql);
+        assertEquals(2, chunks.size());
+        assertEquals("procedure dbo.sp_cierre", chunks.get(0).symbol());
+        assertEquals(1, chunks.get(0).startLine());
+        assertEquals(7, chunks.get(0).endLine(), "el GO cierra el lote");
+        assertEquals("view dbo.v_saldos", chunks.get(1).symbol());
+        assertEquals(9, chunks.get(1).startLine());
+    }
+
+    @Test
+    void longSqlObjectsAreWindowedKeepingTheSymbol() {
+        StringBuilder sb = new StringBuilder("CREATE OR REPLACE FUNCTION f() RETURNS void AS $$\nBEGIN\n");
+        for (int i = 0; i < 200; i++) {
+            sb.append("  PERFORM ").append(i).append(";\n");
+        }
+        sb.append("END;\n$$ LANGUAGE plpgsql;\n");
+        List<CodeChunk> chunks = chunker.chunk("db/f.sql", sb.toString());
+        assertTrue(chunks.size() > 1);
+        assertTrue(chunks.stream().allMatch(c -> "function f".equals(c.symbol()) && "sql".equals(c.kind())));
+        assertEquals(1, chunks.get(0).startLine());
+        assertEquals(204, chunks.get(chunks.size() - 1).endLine());
+    }
+
+    @Test
+    void sqlWithoutObjectsStillUsesWindows() {
+        List<CodeChunk> chunks = chunker.chunk("q.sql", "SELECT 1;\nSELECT 2;\n");
+        assertEquals(1, chunks.size());
+        assertEquals("block", chunks.get(0).kind());
+    }
+
     @Test
     void emptyContentYieldsNoChunks() {
         assertTrue(chunker.chunk("a.sql", "").isEmpty());

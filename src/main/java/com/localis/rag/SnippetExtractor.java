@@ -140,7 +140,7 @@ public final class SnippetExtractor {
         List<CodeChunk> seen = all.stream().filter(c -> sources.stream()
                 .anyMatch(s -> s.path().equals(c.path()) && s.startLine() == c.startLine())).toList();
         List<CodeChunk> containing = seen.isEmpty() ? all : seen;
-        CodeChunk method = containing.stream().filter(c -> "method".equals(c.kind())).findFirst().orElse(null);
+        CodeChunk method = containing.stream().filter(SnippetExtractor::isUnit).findFirst().orElse(null);
         if (method != null) {
             int[] merged = mergeWindows(chunks, method);
             if (merged[1] - merged[0] + 1 <= MAX_FUNCTION_LINES) {
@@ -153,10 +153,15 @@ public final class SnippetExtractor {
         return new int[] {best.startLine(), best.endLine()};
     }
 
+    /** Fragmento con unidad propia (metodo Java, objeto SQL...): todo lo que no es una ventana "block" suelta. */
+    private static boolean isUnit(CodeChunk c) {
+        return c.symbol() != null && !"block".equals(c.kind());
+    }
+
     /** Un metodo largo se indexa en ventanas solapadas con el mismo simbolo: se vuelven a unir. */
     private static int[] mergeWindows(List<CodeChunk> chunks, CodeChunk seed) {
         List<CodeChunk> same = chunks.stream()
-                .filter(c -> "method".equals(c.kind()) && java.util.Objects.equals(c.symbol(), seed.symbol()))
+                .filter(c -> isUnit(c) && java.util.Objects.equals(c.symbol(), seed.symbol()))
                 .sorted(Comparator.comparingInt(CodeChunk::startLine)).toList();
         int start = seed.startLine();
         int end = seed.endLine();
@@ -178,7 +183,7 @@ public final class SnippetExtractor {
     }
 
     private static String symbolAt(List<CodeChunk> chunks, int line) {
-        return chunks.stream().filter(c -> "method".equals(c.kind()) && c.startLine() <= line && line <= c.endLine())
+        return chunks.stream().filter(c -> isUnit(c) && c.startLine() <= line && line <= c.endLine())
                 .map(CodeChunk::symbol).findFirst().orElse(null);
     }
 

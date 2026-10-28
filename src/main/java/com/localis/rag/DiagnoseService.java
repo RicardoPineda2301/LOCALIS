@@ -15,8 +15,8 @@ public final class DiagnoseService {
             You receive a problem description and code excerpts. Each file is introduced by a numbered header
             ("=== [2] FILE: ... ===") and every code line is prefixed with its line number ("123| code"). Rules:
             - Use ONLY the code provided. Never invent files, lines, methods or data.
-            - Cite every piece of evidence as [N:LINE] or [N:START-END], where N is the file number from its header,
-              only with lines shown.
+            - Cite every piece of evidence exactly like [2:45] (file number 2, line 45) or [2:40-52] (a range). The
+              first number is the one in the file header: write that digit, never the letter N. Only cite lines shown.
             - Do NOT rewrite or fix the code. Identify where the fault most likely is and why. You may state in one
               sentence what the faulty line should do instead.
             - Give the single most likely hypothesis first. Add a second or third ONLY if each is backed by different

@@ -87,6 +87,32 @@ class CitationVerifierTest {
     }
 
     @Test
+    void aCitationWithTheLetterNCopiedFromThePromptIsReportedAsInvalid() {
+        List<CitationVerifier.Citation> out = verifier.verify(
+                "Ver [N:355], [n:12-20], [N:LINE] y [N:START-END]; nada mas.", shown);
+        assertEquals(4, out.size());
+        assertTrue(out.stream().allMatch(c -> c.status() == Status.FILE_NOT_FOUND));
+        assertEquals("[N:355]", out.get(0).raw());
+        assertEquals(355, out.get(0).startLine());
+        assertEquals(12, out.get(1).startLine());
+        assertEquals(20, out.get(1).endLine());
+        assertEquals(0, out.get(2).startLine(), "sin numero de linea no se inventa uno");
+    }
+
+    @Test
+    void theLetterNDoesNotSwallowRealCitationsInTheSameAnswer() {
+        List<String> files = List.of("src/com/acme/billing/InvoiceCalculator.java");
+        String resolved = CitationVerifier.resolveNumbered("Ver [1:15] y [N:355].", files);
+        assertEquals("Ver [src/com/acme/billing/InvoiceCalculator.java:15] y [N:355].", resolved,
+                "la cita numerica se resuelve y la de la N se deja tal cual");
+        List<CitationVerifier.Citation> out = verifier.verify(resolved, shown);
+        assertEquals(2, out.size());
+        assertEquals(Status.VERIFIED, out.get(0).status());
+        assertEquals(Status.FILE_NOT_FOUND, out.get(1).status());
+        assertEquals("[N:355]", out.get(1).raw());
+    }
+
+    @Test
     void thePlaceholderPrefixFromOldPromptsIsStrippedAndMatchedByFileName() {
         assertEquals(Status.VERIFIED, statusOf("ver [path/InvoiceCalculator.java:15]"));
         assertEquals(Status.VERIFIED, statusOf("ver [ruta/InvoiceCalculator.java:15]"));

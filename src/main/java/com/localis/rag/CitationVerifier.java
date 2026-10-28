@@ -32,6 +32,13 @@ public final class CitationVerifier {
     static final Pattern NUMBERED = Pattern.compile(
             "\\[(\\d{1,3})\\s*:\\s*L?(\\d+)(?:\\s*[-\u2013]\\s*L?(\\d+))?\\]");
 
+    /**
+     * Cita con la letra N copiada del patron del prompt ("[N:355]", "[n:12-20]", "[N:LINE]", "[N:START-END]"). No
+     * apunta a ninguna fuente: cuenta como cita invalida para que el modelo reciba la correccion.
+     */
+    static final Pattern PLACEHOLDER = Pattern.compile(
+            "\\[\\s*[Nn]\\s*:\\s*(?:L?(\\d+)(?:\\s*[-\u2013]\\s*L?(\\d+))?|LINE|LINEA|START\\s*-\\s*END)\\s*\\]");
+
     /** Prefijos de ejemplo que los modelos pequenos copian del prompt ("[path/File.ext:LINE]"). */
     private static final List<String> PLACEHOLDER_PREFIXES = List.of("path/", "ruta/", "file/", "fichero/");
 
@@ -65,6 +72,15 @@ public final class CitationVerifier {
                 int start = Integer.parseInt(n.group(2));
                 int end = n.group(3) == null ? start : Integer.parseInt(n.group(3));
                 out.put(raw, new Citation(raw, "fuente [" + n.group(1) + "]", start, end, Status.FILE_NOT_FOUND));
+            }
+        }
+        Matcher p = PLACEHOLDER.matcher(answer);
+        while (p.find()) {
+            String raw = p.group();
+            if (!out.containsKey(raw)) {
+                int start = p.group(1) == null ? 0 : Integer.parseInt(p.group(1));
+                int end = p.group(2) == null ? start : Integer.parseInt(p.group(2));
+                out.put(raw, new Citation(raw, "fuente [N]", start, end, Status.FILE_NOT_FOUND));
             }
         }
         return new ArrayList<>(out.values());

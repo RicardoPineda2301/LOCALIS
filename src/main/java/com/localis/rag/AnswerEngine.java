@@ -48,14 +48,8 @@ public final class AnswerEngine {
         if (!bad.isEmpty()) {
             Progress.checkCancelled();
             Progress.report("Corrigiendo citas no verificadas");
-            StringBuilder fb = new StringBuilder("Some of your citations are invalid:\n");
-            bad.forEach(c -> fb.append("- ").append(c.raw()).append(" (").append(c.status()).append(")\n"));
-            fb.append("Rewrite your answer citing ONLY as [N:LINE] or [N:START-END], where N is the number of a file")
-                    .append(" shown (\"=== [N] FILE: ... ===\") and the lines are visible in it.")
-                    .append(" If you cannot support a claim with a visible line, say so instead of citing. ")
-                    .append(languageReminder(language));
             messages.add(Message.assistant(raw));
-            messages.add(Message.user(fb.toString()));
+            messages.add(Message.user(correctionMessage(bad, language)));
             answer = CitationVerifier.resolveNumbered(llm.chat(messages), ctx.files());
             citations = verifier.verify(answer, ctx.shownRanges());
         }
@@ -73,6 +67,21 @@ public final class AnswerEngine {
             warnings.add("La respuesta no cita ninguna linea de codigo; verifiquela manualmente.");
         }
         return new AnswerResult(answer, citations, ctx.sources(), warnings);
+    }
+
+    /**
+     * Peticion de correccion con un ejemplo concreto ([2:45]) en vez del patron [N:LINE]: los modelos pequenos copian
+     * el patron al pie de la letra, con la N incluida, y esa cita no se puede verificar.
+     */
+    public static String correctionMessage(List<Citation> bad, String language) {
+        StringBuilder fb = new StringBuilder("Some of your citations are invalid:\n");
+        bad.forEach(c -> fb.append("- ").append(c.raw()).append(" (").append(c.status()).append(")\n"));
+        fb.append("Rewrite your answer citing ONLY like [2:45] (file number 2, line 45) or [2:40-52] (a range),")
+                .append(" where the first number is the one in a file header shown (\"=== [2] FILE: ... ===\")")
+                .append(" and the lines are visible in it. Write the digit from the header, never the letter N.")
+                .append(" If you cannot support a claim with a visible line, say so instead of citing. ")
+                .append(languageReminder(language));
+        return fb.toString();
     }
 
     /** Si la respuesta salio con claridad en otro idioma, pide una unica reescritura en el correcto. */

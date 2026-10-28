@@ -6,12 +6,16 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Codigo que se le muestra al modelo, con cada linea numerada, y los rangos exactos que ha visto. Cada fichero lleva
  * un numero ("=== [2] FILE: ... ===") para que el modelo cite como [2:45] en vez de copiar rutas; LOCALIS las repone.
  */
 public record Context(String text, Map<String, List<int[]>> shownRanges, List<SourceRef> sources) {
+
+    private static final Logger LOG = LoggerFactory.getLogger(Context.class);
 
     public record SourceRef(String path, int startLine, int endLine, String symbol) {}
 
@@ -30,17 +34,27 @@ public record Context(String text, Map<String, List<int[]>> shownRanges, List<So
     public static Context fromChunks(List<CodeChunk> chunks, int maxChars) {
         List<CodeChunk> chosen = new ArrayList<>();
         int used = 0;
+        int rank = 0;
         for (CodeChunk c : chunks) {
+            rank++;
             int length = format(c).length();
             if (used + length <= maxChars) {
                 chosen.add(c);
                 used += length;
+                LOG.info("contexto #{} entra: {}:{}-{} ({} chars, acumulado {}/{})", rank, c.path(), c.startLine(),
+                        c.endLine(), length, used, maxChars);
             } else if (chosen.isEmpty()) {
                 CodeChunk cut = truncate(c, maxChars);
                 chosen.add(cut);
                 used += format(cut).length();
+                LOG.info("contexto #{} recortado: {}:{}-{} de {}-{} ({} de {} chars)", rank, c.path(),
+                        cut.startLine(), cut.endLine(), c.startLine(), c.endLine(), used, length);
+            } else {
+                LOG.info("contexto #{} no cabe: {}:{}-{} ({} chars, libres {})", rank, c.path(), c.startLine(),
+                        c.endLine(), length, maxChars - used);
             }
         }
+        LOG.info("contexto: {} de {} fragmentos, {} de {} chars", chosen.size(), chunks.size(), used, maxChars);
         chosen.sort(Comparator.comparing(CodeChunk::path).thenComparingInt(CodeChunk::startLine));
 
         StringBuilder sb = new StringBuilder();

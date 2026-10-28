@@ -181,7 +181,8 @@ class PipelineTest {
         String system = llm.chatCalls.get(llm.chatCalls.size() - 1).get(0).content();
         String prompt = llm.chatCalls.get(llm.chatCalls.size() - 1).get(1).content();
         assertFalse(system.contains("path/File"), "el prompt ya no ensena el ejemplo 'path/'");
-        assertTrue(system.contains("[N:LINE]"));
+        assertTrue(system.contains("[2:45]"), "el prompt ensena un ejemplo concreto, no el patron con N");
+        assertFalse(system.contains("[N:LINE]"), "el 7B copia la N si la ve");
         assertTrue(prompt.contains("=== [1] FILE: src/com/acme/billing/InvoiceCalculator.java"));
         assertTrue(r.allCitationsVerified(), r.citations().toString());
         assertEquals("src/com/acme/billing/InvoiceCalculator.java", r.citations().get(0).path());
@@ -203,7 +204,8 @@ class PipelineTest {
 
         assertTrue(r.allCitationsVerified(), r.citations().toString());
         String correction = llm.chatCalls.get(llm.chatCalls.size() - 1).get(3).content();
-        assertTrue(correction.contains("[9:" + roundLine + "]") && correction.contains("[N:LINE]"), correction);
+        assertTrue(correction.contains("[9:" + roundLine + "]") && correction.contains("[2:45]"), correction);
+        assertFalse(correction.contains("[N:LINE]"), correction);
     }
 
     @Test

@@ -36,8 +36,14 @@ public final class RepositoryScanner {
     private static final Set<String> EXTENSIONS = Set.of(
             "java", "kt", "scala", "groovy", "cs", "vb", "sql", "pks", "pkb", "prc", "fnc", "trg", "xml", "properties",
             "yml", "yaml", "gradle", "md", "js", "jsx", "mjs", "cjs", "ts", "tsx", "vue", "svelte", "py", "sh", "bat",
-            "cmd", "ps1", "cbl", "cob", "cpy", "jsp", "html", "aspx", "ascx", "cshtml", "config", "cfg", "ini", "txt",
-            "c", "h", "cpp", "hpp", "go", "php");
+            "cmd", "ps1", "cbl", "cob", "cpy", "jcl", "jsp", "html", "aspx", "ascx", "cshtml", "config", "cfg", "ini",
+            "txt", "c", "h", "cpp", "hpp", "go", "php",
+            // Legacy de escritorio. Los .frx (VB6), .scx/.vcx (FoxPro) y algunos .dfm son binarios: decode() los
+            // descarta y se reportan como binarios, no se indexa basura.
+            "frm", "bas", "cls", "ctl", "vbp", // Visual Basic 6
+            "pas", "dfm", "dpr", "dpk", "inc", // Delphi
+            "prg", "mpr", // Visual FoxPro (los formularios .scx son tablas binarias; convertir con FoxBin2Prg)
+            "form"); // NetBeans Swing (XML del disenador)
 
     /** Cuantos ejemplos de ruta se guardan por motivo de omision (para que el usuario vea cuales). */
     static final int SAMPLE_PATHS = 10;

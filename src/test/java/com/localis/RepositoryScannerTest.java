@@ -148,4 +148,25 @@ class RepositoryScannerTest {
         assertEquals(2, scan.files().size());
         assertEquals(0, scan.omitted().ignoredFiles() + scan.omitted().ignoredDirs());
     }
+
+    @Test
+    void legacyDesktopSourcesAreIndexedAndTheirBinaryCompanionsAreReportedNotIndexed() throws Exception {
+        List<String> text = List.of("vb6/frmFactura.frm", "vb6/modCalculos.bas", "vb6/clsCliente.cls",
+                "vb6/ctlGrid.ctl", "vb6/Sistema.vbp", "delphi/UFactura.pas", "delphi/UFactura.dfm",
+                "delphi/Sistema.dpr", "delphi/Comun.inc", "fox/factura.prg", "fox/menu.mpr",
+                "swing/PanelFactura.form", "cobol/FACT001.cbl", "cobol/FACT001.jcl");
+        for (String f : text) {
+            file(f);
+        }
+        file("vb6/frmFactura.frx");
+        file("fox/factura.scx");
+        file("fox/factura.dbf");
+
+        RepositoryScanner.Scan scan = new RepositoryScanner(tmp).scanAll();
+
+        assertEquals(Set.copyOf(text),
+                scan.files().stream().map(RepositoryScanner.SourceFile::relativePath).collect(Collectors.toSet()));
+        assertEquals(Map.of("frx", 1, "scx", 1, "dbf", 1), scan.omitted().byExtension(),
+                "los companeros binarios quedan fuera, pero visibles en el reporte de cobertura");
+    }
 }

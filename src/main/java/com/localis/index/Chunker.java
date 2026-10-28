@@ -44,6 +44,12 @@ public final class Chunker {
                 return sql;
             }
         }
+        if (lower.endsWith(".md") || lower.endsWith(".markdown")) {
+            List<CodeChunk> md = chunkMarkdown(path, lines);
+            if (!md.isEmpty()) {
+                return md;
+            }
+        }
         if (JS_EXTENSIONS.stream().anyMatch(lower::endsWith)) {
             List<CodeChunk> js = chunkByTopLevelDeclarations(path, lines, JS_DECLARATION, "function");
             if (!js.isEmpty()) {
@@ -106,6 +112,111 @@ public final class Chunker {
         }
         if (cursor <= lines.size()) {
             windows(out, path, lines, cursor, lines.size(), "block", null);
+        }
+        return out;
+    }
+
+    private static final Pattern MD_HEADING = Pattern.compile("^(#{1,6})\\s+(.+?)\\s*#*\\s*$");
+    private static final Pattern MD_TABLE_SEPARATOR = Pattern.compile("^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s*)*\\|?\\s*$");
+
+    /**
+     * Markdown: un fragmento por seccion (cada encabezado abre una, hasta el siguiente de cualquier nivel), con el
+     * titulo como simbolo y kind "section". Lo anterior al primer encabezado va en ventanas. Ademas, cada fila de
+     * una tabla se reescribe en el texto que ve el modelo como "Encabezado: valor · Encabezado: valor", linea por
+     * linea, para que un modelo pequeno no lea la columna vecina; la numeracion de lineas no cambia, asi que las
+     * citas siguen apuntando al archivo real. Vacio si no hay encabezados ni tablas.
+     */
+    private List<CodeChunk> chunkMarkdown(String path, List<String> lines) {
+        List<String> view = rewriteTables(lines);
+        List<Range> sections = new ArrayList<>();
+        int openStart = -1;
+        String openTitle = null;
+        boolean inFence = false;
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (line.trim().startsWith("```")) {
+                inFence = !inFence;
+                continue;
+            }
+            Matcher m = inFence ? null : MD_HEADING.matcher(line);
+            if (m != null && m.find()) {
+                if (openStart >= 0) {
+                    sections.add(new Range(openStart, lastNonBlank(lines, openStart, i + 1), openTitle));
+                }
+                openStart = i + 1;
+                openTitle = m.group(2);
+            }
+        }
+        if (openStart >= 0) {
+            sections.add(new Range(openStart, lines.size(), openTitle));
+        }
+        if (sections.isEmpty() && view.equals(lines)) {
+            return List.of();
+        }
+        List<CodeChunk> out = new ArrayList<>();
+        int cursor = 1;
+        for (Range r : sections) {
+            if (r.start() > cursor) {
+                windows(out, path, view, cursor, lastNonBlank(lines, cursor, r.start()), "block", null);
+            }
+            windows(out, path, view, r.start(), r.end(), "section", r.symbol());
+            cursor = r.end() + 1;
+        }
+        if (cursor <= lines.size()) {
+            windows(out, path, view, cursor, lines.size(), "block", null);
+        }
+        return out;
+    }
+
+    /** Copia de las lineas con cada fila de tabla (no la cabecera ni el separador) como "Col: valor · Col: valor". */
+    static List<String> rewriteTables(List<String> lines) {
+        List<String> out = new ArrayList<>(lines);
+        List<String> headers = null;
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            boolean row = line.trim().startsWith("|");
+            if (row && i + 1 < lines.size() && MD_TABLE_SEPARATOR.matcher(lines.get(i + 1)).matches()) {
+                headers = cells(line);
+                i++; // el separador se deja tal cual
+                continue;
+            }
+            if (!row) {
+                headers = null;
+                continue;
+            }
+            if (headers == null) {
+                continue;
+            }
+            List<String> values = cells(line);
+            StringBuilder sb = new StringBuilder();
+            for (int k = 0; k < values.size(); k++) {
+                if (values.get(k).isEmpty()) {
+                    continue;
+                }
+                if (sb.length() > 0) {
+                    sb.append(" \u00b7 ");
+                }
+                String header = k < headers.size() && !headers.get(k).isEmpty() ? headers.get(k) : "Columna " + (k + 1);
+                sb.append(header).append(": ").append(values.get(k));
+            }
+            if (sb.length() > 0) {
+                out.set(i, sb.toString());
+            }
+        }
+        return out;
+    }
+
+    private static List<String> cells(String row) {
+        String t = row.trim();
+        if (t.startsWith("|")) {
+            t = t.substring(1);
+        }
+        if (t.endsWith("|")) {
+            t = t.substring(0, t.length() - 1);
+        }
+        List<String> out = new ArrayList<>();
+        for (String c : t.split("(?<!\\\\)\\|")) {
+            out.add(c.replace("\\|", "|").trim());
         }
         return out;
     }

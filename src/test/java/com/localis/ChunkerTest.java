@@ -217,6 +217,49 @@ class ChunkerTest {
         assertEquals("block", chunks.get(0).kind());
     }
 
+    private static final String MD = String.join("\n",
+            "Notas del sistema",
+            "",
+            "| Campo | Tipo | Nota |",
+            "|---|---|---|",
+            "| estado | text | vigente |",
+            "| fecha | date | |",
+            "",
+            "# Contratos",
+            "",
+            "Texto.",
+            "",
+            "## Rescision",
+            "```md",
+            "# no es encabezado",
+            "```",
+            "Fin.",
+            "");
+
+    @Test
+    void markdownIsSplitPerHeadingAndTableRowsAreRewrittenWithoutMovingLines() {
+        List<CodeChunk> chunks = chunker.chunk("docs/notas.md", MD);
+        assertEquals(java.util.Arrays.asList(null, "Contratos", "Rescision"),
+                chunks.stream().map(CodeChunk::symbol).toList());
+
+        CodeChunk intro = chunks.get(0);
+        assertEquals("block", intro.kind());
+        assertEquals(1, intro.startLine());
+        assertEquals(6, intro.endLine());
+        List<String> view = List.of(intro.text().split("\n", -1));
+        assertEquals(6, view.size(), "misma cantidad de lineas: las citas no se mueven");
+        assertEquals("| Campo | Tipo | Nota |", view.get(2), "la cabecera se deja tal cual");
+        assertEquals("|---|---|---|", view.get(3));
+        assertEquals("Campo: estado \u00b7 Tipo: text \u00b7 Nota: vigente", view.get(4));
+        assertEquals("Campo: fecha \u00b7 Tipo: date", view.get(5), "la celda vacia se omite");
+
+        assertEquals("section", chunks.get(1).kind());
+        assertEquals(8, chunks.get(1).startLine());
+        assertEquals(10, chunks.get(1).endLine(), "sin la linea en blanco antes del siguiente encabezado");
+        assertEquals(12, chunks.get(2).startLine());
+        assertEquals(16, chunks.get(2).endLine(), "el # dentro del bloque de codigo no abre seccion");
+    }
+
     @Test
     void emptyContentYieldsNoChunks() {
         assertTrue(chunker.chunk("a.sql", "").isEmpty());
